@@ -2,8 +2,13 @@
 // profile.php
 session_start(); // Start the session
 
+// Set error reporting for debugging - IMPORTANT!
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 // Include the database connection file
-require_once 'database.php'; // Adjust path as necessary
+require_once 'database.php'; // Adjust path as necessary (assuming this defines $link)
 
 // --- User Authentication Check ---
 // If the user is not logged in, redirect them to the login page
@@ -17,12 +22,8 @@ $userData = null; // To store fetched user data
 $errorMessage = '';
 $successMessage = '';
 
-// Set header for JSON response if it's an AJAX POST request
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    header('Content-Type: application/json');
-}
-
 // --- Fetch User Data for Display ---
+// Using $link for database connection
 $stmt = $link->prepare("SELECT full_name, student_number, email, phone_number, profile_pic_url FROM Students WHERE student_id = ?");
 if ($stmt === false) {
     $errorMessage = 'Database query preparation failed: ' . $link->error;
@@ -42,8 +43,19 @@ if ($stmt === false) {
     $stmt->close();
 }
 
+// TEMPORARY DEBUGGING: Output the profile picture URL for inspection in page source
+if ($userData && isset($userData['profile_pic_url'])) {
+    echo "<!-- Debug: Profile Pic URL: " . htmlspecialchars($userData['profile_pic_url']) . " -->";
+} else {
+    echo "<!-- Debug: Profile Pic URL: Not set or user data not found. Defaulting to assets/default_profile.png -->";
+}
+// END TEMPORARY DEBUGGING
+
 // --- Process POST request (Updating Profile) ---
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Set header for JSON response (only for POST requests)
+    header('Content-Type: application/json');
+
     $newFullName = trim($_POST['full_name'] ?? '');
     $newPhoneNumber = trim($_POST['phone_number'] ?? '');
     $existingProfilePicUrl = trim($_POST['existing_profile_pic_url'] ?? ''); // Hidden field for current image
@@ -62,7 +74,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $profilePicToSave = $existingProfilePicUrl; // Default to existing URL
     $uploadDir = 'uploads/profiles/'; // Directory to store profile pictures
     if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0777, true); // Create directory if it doesn't exist
+        // Attempt to create directory with more robust error handling
+        if (!mkdir($uploadDir, 0777, true)) { // 0777 for testing, consider 0755 or 0770 for production
+            echo json_encode(['success' => false, 'message' => 'Failed to create upload directory. Check server permissions.']);
+            exit();
+        }
     }
 
     if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] === UPLOAD_ERR_OK) {
@@ -86,10 +102,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         $profilePicToSave = $fileDestination; // Update URL to new file path
                         // Optional: Delete old profile picture file if it's not the default
                         if (!empty($existingProfilePicUrl) && $existingProfilePicUrl !== 'assets/default_profile.png' && file_exists($existingProfilePicUrl)) {
-                            unlink($existingProfilePicUrl);
+                            // Ensure the old file is within the intended upload directory for security
+                            if (strpos($existingProfilePicUrl, $uploadDir) === 0) {
+                                unlink($existingProfilePicUrl);
+                            } else {
+                                error_log("Security warning: Attempted to delete file outside of upload directory: " . $existingProfilePicUrl);
+                            }
                         }
                     } else {
-                        echo json_encode(['success' => false, 'message' => 'Failed to move uploaded profile picture.']);
+                        // Log the error for debugging
+                        error_log("Failed to move uploaded file: " . $fileTmpName . " to " . $fileDestination . " (Error: " . error_get_last()['message'] . ")");
+                        echo json_encode(['success' => false, 'message' => 'Failed to move uploaded profile picture. Check server logs for details.']);
                         exit();
                     }
                 } else {
@@ -107,6 +130,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // --- Update user data in database ---
+    // Using $link for database connection
     $updateStmt = $link->prepare("UPDATE Students SET full_name = ?, phone_number = ?, profile_pic_url = ? WHERE student_id = ?");
     if ($updateStmt === false) {
         echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $link->error]);
@@ -127,7 +151,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 
 // Close the database connection (only for GET requests, POST requests would have exited)
-$link->close();
+// Using $link for database connection
+if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+    $link->close();
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -240,6 +267,7 @@ $link->close();
             text-align: center;
         }
 
+        /* Original styles for profile picture display */
         .profile-pic-display {
             width: 120px;
             height: 120px;
@@ -463,9 +491,20 @@ $link->close();
 
         <?php if ($userData): ?>
             <div class="profile-pic-area">
-                <img src="<?php echo htmlspecialchars($userData['profile_pic_url'] ?? 'assets/default_profile.png'); ?>"
-                     alt="Profile Picture" class="profile-pic-display" id="profile-pic-display"
-                     onerror="this.onerror=null; this.src='assets/default_profile.png';">
+               <img src="<?php
+                    $default = 'assets/default_profile.png';
+                    $pic = !empty($userData['profile_pic_url']) ? $userData['profile_pic_url'] : $default;
+                    
+                    if (filter_var($pic, FILTER_VALIDATE_URL)) {
+                        echo htmlspecialchars($pic, ENT_QUOTES, 'UTF-8');
+                    } elseif (strpos($pic, 'uploads/profiles/') === 0 && file_exists($pic)) {
+                        echo htmlspecialchars($pic, ENT_QUOTES, 'UTF-8');
+                    } else {
+                        echo $default;
+                    }
+                ?>"
+                alt="Profile Picture" class="profile-pic-display" id="profile-pic-display"
+                onerror="this.onerror=null; this.src='assets/default_profile.png';">
             </div>
 
             <form action="profile.php" method="post" enctype="multipart/form-data" id="profileForm">
