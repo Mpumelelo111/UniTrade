@@ -1,80 +1,126 @@
 <?php
 // login.php
+
+// Start output buffering at the very beginning to capture any unwanted output
+ob_start();
+
 session_start(); // Start the session at the very beginning of the page
 
-// Include the database connection file
-// Make sure 'db_connect.php' is in the correct path relative to this file.
-// Assuming db_connect.php (from 'db-connection-updated' immersive) is in the same directory.
-require_once 'database.php';
+// Set error reporting for debugging (REMOVE OR SET TO 0 IN PRODUCTION)
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 
-// Set header for JSON response. This file will handle both HTML display and AJAX requests.
-// We only set this header if it's an AJAX request expecting JSON response (i.e., POST request).
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+// Include the database connection file
+require_once 'database.php'; // Adjust path if necessary, e.g., '../config/database.php'
+
+// Function to send JSON response and exit
+// This function will also clear any buffered output before sending JSON
+function sendJsonResponse($success, $message, $redirect = null, $errorDetails = null) {
+    // Clear any previously buffered output to ensure only JSON is sent
+    ob_clean();
+
+    // Set header for JSON response
     header('Content-Type: application/json');
+
+    $response = ['success' => $success, 'message' => $message];
+    if ($redirect) {
+        $response['redirect'] = $redirect;
+    }
+    if ($errorDetails && !$success) { // Only log error details if it's an error response
+        error_log("Login Error: " . $message . " Details: " . (is_array($errorDetails) ? json_encode($errorDetails) : $errorDetails));
+    }
+    echo json_encode($response);
+    exit();
 }
 
 // Initialize error message for display in HTML (if not using AJAX for initial load)
 $errorMessage = "";
 
-// Process Login Form Submission
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    // Get and sanitize input
-    $username_email = trim($_POST['username_email'] ?? '');
-    $password = $_POST['password'] ?? ''; // Do not trim password before verification
-
-    // Server-side validation
-    if (empty($username_email) || empty($password)) {
-        echo json_encode(['success' => false, 'message' => 'Please enter username/email and password.']);
-        exit();
+// --- Main execution block ---
+try {
+    // Check if the connection object ($link) is actually available and valid
+    if (!isset($link) || $link->connect_error) {
+        // If connection fails, send JSON error and exit if it's a POST request,
+        // otherwise, let the HTML render with a message (though this should be caught by sendJsonResponse)
+        if ($_SERVER["REQUEST_METHOD"] == "POST") {
+            sendJsonResponse(false, 'Failed to connect to the database. Please check database.php configuration.', null, $link->connect_error ?? 'Connection object not set.');
+        } else {
+            $errorMessage = 'Failed to connect to the database. Please try again later.';
+        }
     }
 
-    // Prepare a SQL statement to fetch user by email or student number
-    // Using $conn for the database connection object as defined in db_connect.php
-    $stmt = $conn->prepare("SELECT student_id, full_name, student_number, email, password_hash, is_verified FROM Students WHERE email = ? OR student_number = ?");
+    // Process Login Form Submission
+    if ($_SERVER["REQUEST_METHOD"] == "POST") {
+        // Get and sanitize input
+        $username_email = trim($_POST['username_email'] ?? '');
+        $password = $_POST['password'] ?? ''; // Do not trim password before verification
 
-    if ($stmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database query preparation failed: ' . $conn->error]);
-        exit();
-    }
+        // Server-side validation
+        if (empty($username_email) || empty($password)) {
+            sendJsonResponse(false, 'Please enter username/email and password.');
+        }
 
-    $stmt->bind_param("ss", $username_email, $username_email); // Bind the same value to both placeholders
-    $stmt->execute();
-    $result = $stmt->get_result(); // Get the result set
-    $user = $result->fetch_assoc(); // Fetch the user data as an associative array
-    $stmt->close(); // Close the statement
+        // Prepare a SQL statement to fetch user by email or student number
+        // Using $link for the database connection object as defined in database.php
+        $stmt = $link->prepare("SELECT student_id, full_name, student_number, email, password_hash, is_verified FROM Students WHERE email = ? OR student_number = ?");
 
-    if ($user) {
-        // User found, now verify password
-        if (password_verify($password, $user['password_hash'])) {
-            // Password is correct
-            if ($user['is_verified'] == 1) {
-                // User is verified, create session variables
-                $_SESSION['user_id'] = $user['student_id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['student_number'] = $user['student_number'];
-                $_SESSION['email'] = $user['email'];
+        if ($stmt === false) {
+            sendJsonResponse(false, 'Database query preparation failed: ' . $link->error);
+        }
 
-                // Send success response
-                echo json_encode(['success' => true, 'message' => 'Login successful! Redirecting...', 'redirect' => 'dashboard.php']);
+        $stmt->bind_param("ss", $username_email, $username_email); // Bind the same value to both placeholders
+        $stmt->execute();
+        $result = $stmt->get_result(); // Get the result set
+        $user = $result->fetch_assoc(); // Fetch the user data as an associative array
+        $stmt->close(); // Close the statement
+
+        if ($user) {
+            // User found, now verify password
+            if (password_verify($password, $user['password_hash'])) {
+                // Password is correct
+                if ($user['is_verified'] == 1) {
+                    // User is verified, create session variables
+                    $_SESSION['user_id'] = $user['student_id'];
+                    $_SESSION['full_name'] = $user['full_name'];
+                    $_SESSION['student_number'] = $user['student_number'];
+                    $_SESSION['email'] = $user['email'];
+
+                    // Send success response
+                    sendJsonResponse(true, 'Login successful! Redirecting...', 'dashboard.php');
+                } else {
+                    // Account not verified
+                    sendJsonResponse(false, 'Your account is not verified. Please check your email.');
+                }
             } else {
-                // Account not verified
-                echo json_encode(['success' => false, 'message' => 'Your account is not verified. Please check your email.']);
+                // Invalid password
+                sendJsonResponse(false, 'Invalid username/email or password.');
             }
         } else {
-            // Invalid password
-            echo json_encode(['success' => false, 'message' => 'Invalid username/email or password.']);
+            // User not found
+            sendJsonResponse(false, 'Invalid username/email or password.');
         }
-    } else {
-        // User not found
-        echo json_encode(['success' => false, 'message' => 'Invalid username/email or password.']);
+        // sendJsonResponse already exits, so no need for exit() here.
     }
 
-    // Since we are returning JSON and exiting, the rest of the HTML won't be rendered.
-    exit();
-}
+    // If it's a GET request, or if the POST request didn't exit (e.g., due to a logic error),
+    // render the HTML form below.
+    // Check for 'verified' parameter from verify-page.php redirect
+    if (isset($_GET['verified']) && $_GET['verified'] === 'true') {
+        $errorMessage = 'Account verified successfully! You can now log in.';
+    }
 
-// If it's a GET request, or if the POST request didn't exit, render the HTML form below.
-// Any previous error messages from failed POST attempts could be displayed here if desired.
+} catch (Throwable $e) {
+    // Catch any unexpected PHP errors/exceptions
+    sendJsonResponse(false, 'An unexpected server error occurred: ' . $e->getMessage(), null, ['file' => $e->getFile(), 'line' => $e->getLine(), 'trace' => $e->getTraceAsString()]);
+} finally {
+    // Close the database connection if it was opened
+    if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+        $link->close();
+    }
+    // End output buffering for GET requests (POST requests exit earlier via sendJsonResponse)
+    ob_end_flush();
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -172,6 +218,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         .error-text {
             color: #ff6b6b; /* Slightly brighter red for errors on dark background */
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
+        .success-text { /* Added for success messages */
+            color: #2ecc71; /* Green for success */
             text-align: center;
             margin-bottom: 15px;
             font-size: 0.9em;
@@ -366,6 +419,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <form action="login.php" method="post" id="loginForm">
             <h2>Login</h2>
             <div class="error-text" id="error-text" style="display:none;"></div>
+            <div class="success-text" id="success-text" style="display:none;"></div> <!-- Added success message div -->
 
             <div class="input-box">
                 <div class="input-field">
@@ -406,12 +460,33 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 document.addEventListener('DOMContentLoaded', () => {
     const loginForm = document.getElementById('loginForm'); // Added ID to form for easier selection
     const errorTextDiv = document.getElementById('error-text');
+    const successTextDiv = document.getElementById('success-text'); // Get the success message div
 
     function displayMessage(message, type = 'error') {
-        errorTextDiv.textContent = message;
-        errorTextDiv.style.color = (type === 'success') ? '#2ecc71' : '#ff6b6b';
-        errorTextDiv.style.display = 'block';
+        errorTextDiv.style.display = 'none'; // Hide both initially
+        successTextDiv.style.display = 'none';
+
+        if (type === 'success') {
+            successTextDiv.textContent = message;
+            successTextDiv.style.color = '#2ecc71'; // Green for success
+            successTextDiv.style.display = 'block';
+        } else {
+            errorTextDiv.textContent = message;
+            errorTextDiv.style.color = '#ff6b6b'; // Red for error
+            errorTextDiv.style.display = 'block';
+        }
     }
+
+    // Check for 'verified' parameter in URL on page load
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('verified') && urlParams.get('verified') === 'true') {
+        displayMessage('Account verified successfully! You can now log in.', 'success');
+        // Optionally remove the 'verified' parameter from the URL after displaying the message
+        urlParams.delete('verified');
+        const newUrl = window.location.origin + window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
+        window.history.replaceState({}, document.title, newUrl);
+    }
+
 
     loginForm.addEventListener('submit', async (event) => {
         event.preventDefault(); // Prevent default HTML form submission

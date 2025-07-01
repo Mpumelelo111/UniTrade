@@ -1,6 +1,15 @@
 <?php
 // delete_item.php
+
+// Start output buffering at the very beginning to capture any unwanted output
+ob_start();
+
 session_start(); // Start the session
+
+// Set error reporting for production (errors will be logged, not displayed)
+ini_set('display_errors', 0);
+ini_set('display_startup_errors', 0);
+error_reporting(E_ALL);
 
 // Include the database connection file
 require_once 'database.php'; // Adjust path if necessary
@@ -24,9 +33,10 @@ if (empty($item_id) || !is_numeric($item_id)) {
 }
 
 // --- Verify item ownership before attempting to delete/update status ---
-$stmt = $conn->prepare("SELECT seller_id FROM Items WHERE item_id = ?");
+$stmt = $link->prepare("SELECT seller_id FROM Items WHERE item_id = ?");
 if ($stmt === false) {
-    $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Database query preparation failed during ownership check: ' . $conn->error];
+    // FIX: Changed $conn->error to $link->error
+    $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Database query preparation failed during ownership check: ' . $link->error];
     header("Location: dashboard.php");
     exit();
 }
@@ -47,9 +57,9 @@ if (!$item || $item['seller_id'] != $current_user_id) {
 // It's generally better practice not to hard-delete records, especially if there might be linked transactions or a need for historical data.
 // We'll set the status to 'Removed'. You can define other statuses like 'Archived' etc.
 $new_status = 'Removed';
-$stmt = $conn->prepare("UPDATE Items SET status = ? WHERE item_id = ? AND seller_id = ?"); // Added seller_id again for extra security
+$stmt = $link->prepare("UPDATE Items SET status = ? WHERE item_id = ? AND seller_id = ?"); // Added seller_id again for extra security
 if ($stmt === false) {
-    $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Database update preparation failed for deletion: ' . $conn->error];
+    $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Database update preparation failed for deletion: ' . $link->error];
     header("Location: dashboard.php");
     exit();
 }
@@ -64,7 +74,12 @@ if ($stmt->execute()) {
 $stmt->close();
 
 // Close the database connection
-$conn->close();
+if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+    $link->close();
+}
+
+// End output buffering and send the content to the browser
+ob_end_flush();
 
 // Redirect back to the dashboard after processing
 header("Location: dashboard.php");

@@ -1,14 +1,18 @@
 <?php
 // reset_password.php
+
+// Start output buffering at the very beginning to capture any unwanted output
+ob_start();
+
 session_start(); // Start the session at the very beginning of the page
 
-// Include the database connection file
-require_once 'database.php'; // Adjust path if necessary
+// Set error reporting for production (errors will be logged, not displayed)
+ini_set('display_errors', 1); // Temporarily set to 1 for debugging - IMPORTANT!
+ini_set('display_startup_errors', 1); // Temporarily set to 1 for debugging - IMPORTANT!
+error_reporting(E_ALL);
 
-// Set header for JSON response if it's an AJAX POST request
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    header('Content-Type: application/json');
-}
+// Include the database connection file
+require_once 'database.php'; // Adjust path if necessary (e.g., 'db_connect.php' or 'database.php')
 
 // Initialize messages for display
 $errorMessage = '';
@@ -16,6 +20,9 @@ $successMessage = '';
 
 // Process POST request (form submission to send reset link)
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Set header for JSON response
+    header('Content-Type: application/json');
+
     // Get and sanitize input
     $studentNumber = trim($_POST['student_number'] ?? '');
     $email = trim($_POST['email'] ?? '');
@@ -31,10 +38,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // Prepare a SQL statement to find the user by student number and email
-    $stmt = $conn->prepare("SELECT student_id, full_name FROM Students WHERE student_number = ? AND email = ?");
+    // Using $link as per user's database connection setup
+    $stmt = $link->prepare("SELECT student_id, full_name FROM Students WHERE student_number = ? AND email = ?");
 
     if ($stmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database query preparation failed: ' . $conn->error]);
+        echo json_encode(['success' => false, 'message' => 'Database query preparation failed: ' . $link->error]);
         exit();
     }
 
@@ -50,41 +58,75 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $expiryTime = date('Y-m-d H:i:s', strtotime('+1 hour')); // Token valid for 1 hour
 
         // Update the user's record with the new token and its expiry
-        $updateStmt = $conn->prepare("UPDATE Students SET verification_code = ?, verification_code_expiry = ? WHERE student_id = ?");
+        // Using $link as per user's database connection setup
+        $updateStmt = $link->prepare("UPDATE Students SET verification_code = ?, verification_code_expiry = ? WHERE student_id = ?");
         if ($updateStmt === false) {
-            echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $conn->error]);
+            echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $link->error]);
             exit();
         }
         $updateStmt->bind_param("ssi", $resetToken, $expiryTime, $user['student_id']);
 
         if ($updateStmt->execute()) {
-            // --- Placeholder for Sending Password Reset Email ---
-            // In a real application, you would send an email here.
-            // This email should contain a link to the 'set_new_password.php' page
-            // with the user's email and the generated reset token.
-            $resetLink = "http://yourdomain.com/set_new_password.php?email=" . urlencode($email) . "&code=" . urlencode($resetToken);
+            // --- Sending Password Reset Email ---
+            $resetLink = "http://localhost/UNITRADE/new-password.php?email=" . urlencode($email) . "&code=" . urlencode($resetToken);
 
-            // Example using PHP's mail() function:
-            // $subject = "Password Reset for Your Unitrade Account";
-            // $message = "Dear " . htmlspecialchars($user['full_name']) . ",\n\n";
-            // $message .= "You have requested a password reset for your Unitrade account. ";
-            // $message .= "Please click the following link to set a new password:\n\n";
-            // $message .= $resetLink . "\n\n";
-            // $message .= "This link will expire in 1 hour.\n\n";
-            // $message .= "If you did not request a password reset, please ignore this email.\n\n";
-            // $message .= "Regards,\nUnitrade Team";
-            // $headers = "From: no-reply@yourdomain.com\r\n";
-            // $headers .= "Reply-To: no-reply@yourdomain.com\r\n";
-            // $headers .= "X-Mailer: PHP/" . phpversion();
-            // mail($email, $subject, $message, $headers);
+            try {
+                // Include PHPMailer if not already included
+                // If you installed via Composer, use: require_once __DIR__ . '/vendor/autoload.php';
+                // If you manually placed PHPMailer, adjust paths as needed, e.g.:
+                require 'PHPMailer/src/Exception.php';
+                require 'PHPMailer/src/PHPMailer.php';
+                require 'PHPMailer/src/SMTP.php';
+                
+                $mail = new PHPMailer\PHPMailer\PHPMailer(true); // Enable exceptions
 
-            // Consider using PHPMailer for more robust email sending (SMTP, HTML emails, etc.)
-            // as shown in the signup.php example.
+                // Server settings
+                $mail->SMTPDebug = 0; // Disable debug output to prevent JSON corruption
+                $mail->isSMTP();                                            // Send using SMTP
+                $mail->Host       = 'smtp.gmail.com';                       // Set the SMTP server to send through
+                $mail->SMTPAuth   = true;                                   // Enable SMTP authentication
+                $mail->Username   = 'mpumelelomkwanazi91@gmail.com';        // SMTP username (your Gmail address)
+                $mail->Password   = 'vusczsavaqyacfuy';                     // SMTP password (your Gmail App Password)
+                $mail->SMTPSecure = PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS; // Enable implicit TLS encryption
+                $mail->Port       = 465;                                    // TCP port to connect to; use 587 for `PHPMailer::ENCRYPTION_STARTTLS`
+
+                // Recipients
+                $mail->setFrom("mpumelelomkwanazi91@gmail.com", 'Unitrade');
+                $mail->addAddress($email); // Add a recipient
+
+                // Content
+                $mail->isHTML(true);                                  // Set email format to HTML
+                $mail->Subject = "Password Reset for Your Unitrade Account";
+                $mail->Body    = nl2br(
+                    "Dear " . htmlspecialchars($user['full_name']) . ",\n\n" .
+                    "You have requested a password reset for your Unitrade account. " .
+                    "Please click the following link to set a new password:\n\n" .
+                    $resetLink . "\n\n" .
+                    "This link will expire in 1 hour.\n\n" .
+                    "If you did not request a password reset, please ignore this email.\n\n" .
+                    "Regards,\nUnitrade Team"
+                );
+                $mail->AltBody =
+                    "Dear " . htmlspecialchars($user['full_name']) . ",\n\n" .
+                    "You have requested a password reset for your Unitrade account. " .
+                    "Please click the following link to set a new password:\n\n" .
+                    $resetLink . "\n\n" .
+                    "This link will expire in 1 hour.\n\n" .
+                    "If you did not request a password reset, please ignore this email.\n\n" .
+                    "Regards,\nUnitrade Team";
+
+                $mail->send();
+                // Email sent successfully (from PHPMailer's perspective, doesn't guarantee delivery)
+                echo json_encode(['success' => true, 'message' => 'A password reset link has been sent to your email address.']);
+            } catch (Exception $e) {
+                // Failed to send email (PHPMailer threw an exception)
+                error_log("Failed to send password reset email to " . $email . " for user " . $user['student_id'] . ". PHPMailer Error: " . $e->getMessage()); // Use $e->getMessage() for specific error
+                echo json_encode(['success' => false, 'message' => 'Failed to send password reset email. Please try again later.']);
+            }
             // ----------------------------------------------------
 
-            echo json_encode(['success' => true, 'message' => 'A password reset link has been sent to your email address.']);
         } else {
-            echo json_encode(['success' => false, 'message' => 'Failed to send reset link. Please try again: ' . $updateStmt->error]);
+            echo json_encode(['success' => false, 'message' => 'Failed to generate reset link. Please try again: ' . $updateStmt->error]);
         }
         $updateStmt->close();
     } else {
@@ -96,8 +138,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 
 // Close the database connection (only if it's not an AJAX POST request that exited earlier)
-// This will only be reached on a GET request or if a POST request didn't exit due to an error
-$conn->close();
+// Using $link as per user's database connection setup
+if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+    $link->close();
+}
+
+// End output buffering and send the content to the browser for GET requests
+ob_end_flush();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -264,7 +311,7 @@ $conn->close();
             cursor: pointer;
             transition: background-color 0.3s ease, transform 0.2s ease;
             margin-top: 10px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 44px 8px rgba(0, 0, 0, 0.2);
         }
 
         .btn:hover {
@@ -355,7 +402,7 @@ $conn->close();
     </nav>
 
     <div class="wrapper">
-        <form action="reset_password.php" method="post" id="resetPasswordForm">
+        <form action="reset-password.php" method="post" id="resetPasswordForm">
             <h2>Reset Password</h2>
             <div class="error-text" id="error-text" style="display:none;"></div>
             <div class="success-text" id="success-text" style="display:none;"></div>
@@ -419,7 +466,7 @@ $conn->close();
                     try {
                         const formData = new FormData(resetPasswordForm);
 
-                        const response = await fetch('reset_password.php', {
+                        const response = await fetch('reset-password.php', {
                             method: 'POST',
                             body: formData
                         });

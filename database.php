@@ -15,22 +15,24 @@ $password = ""; // e.g., your_db_password (remember to use a strong password!)
 $dbname = "unitrade"; // The name of your database
 
 // Create connection
-$conn = new mysqli($servername, $username, $password, $dbname);
+$link = new mysqli($servername, $username, $password, $dbname); // Changed $conn to $link for consistency
 
 // Check connection
-if ($conn->connect_error) {
-    // Return a JSON error response if the database connection fails
-    echo json_encode(['success' => false, 'message' => 'Database connection failed: ' . $conn->connect_error]);
-    exit(); // Stop script execution on connection failure
+if ($link->connect_error) { // Changed $conn to $link
+    // On connection failure, simply die or throw an exception.
+    // The calling script (e.g., signup.php) will catch this and handle the JSON response.
+    die("Connection failed: " . $link->connect_error);
+    // Alternatively, for more controlled error handling in production:
+    // error_log("Database connection failed: " . $link->connect_error);
+    // exit(); // Or throw new Exception("Database connection failed.");
 }
 
 // Set character set to UTF-8 for proper handling of various characters.
 // This is important to prevent character encoding issues.
-// FIX: Changed '$link' to '$conn' to match your connection variable.
-$conn->set_charset("utf8mb4");
+$link->set_charset("utf8mb4"); // Changed $conn to $link
 
-// At this point, the $conn variable holds the active database connection.
-// This script should be saved as a file (e.g., 'db_connect.php')
+// At this point, the $link variable holds the active database connection.
+// This script should be saved as a file (e.g., 'database.php')
 // and included using 'require_once' in any other PHP files that need database access.
 
 ?>

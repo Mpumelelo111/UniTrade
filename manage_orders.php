@@ -31,9 +31,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
     }
 
     // Basic validation of transaction ownership (crucial security step)
-    $checkStmt = $conn->prepare("SELECT seller_id FROM Transactions WHERE transaction_id = ?");
+    $checkStmt = $link->prepare("SELECT seller_id FROM Transactions WHERE transaction_id = ?");
     if ($checkStmt === false) {
-        echo json_encode(['success' => false, 'message' => 'DB error: ' . $conn->error]);
+        echo json_encode(['success' => false, 'message' => 'DB error: ' . $link->error]);
         exit();
     }
     $checkStmt->bind_param("i", $transaction_id);
@@ -55,9 +55,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
             exit();
         }
 
-        $updateStmt = $conn->prepare("UPDATE Transactions SET status = ? WHERE transaction_id = ? AND seller_id = ?");
+        $updateStmt = $link->prepare("UPDATE Transactions SET status = ? WHERE transaction_id = ? AND seller_id = ?");
         if ($updateStmt === false) {
-            echo json_encode(['success' => false, 'message' => 'DB error: ' . $conn->error]);
+            echo json_encode(['success' => false, 'message' => 'DB error: ' . $link->error]);
             exit();
         }
         $updateStmt->bind_param("sii", $new_status, $transaction_id, $current_user_id);
@@ -76,7 +76,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
 
 // --- Fetch orders for the current seller (GET request) ---
 // Join Items and Students tables to get item title and buyer name
-$stmt = $conn->prepare("
+$stmt = $link->prepare("
     SELECT
         t.transaction_id,
         t.item_id,
@@ -124,7 +124,7 @@ if (isset($_SESSION['form_message'])) {
 }
 
 // Close the database connection (only for GET requests, POST requests would have exited)
-$conn->close();
+$link->close();
 ?>
 <!DOCTYPE html>
 <html lang="en">

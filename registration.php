@@ -1,7 +1,6 @@
 <?php
 // registration.php
-session_start();
- // Start the session at the very beginning of the page
+session_start(); // Start the session at the very beginning of the page
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -380,7 +379,7 @@ session_start();
             const input = document.getElementById(id);
             if (input.type === "password") {
                 input.type = "text";
-                element.textContent = "🙈"; // Or change to 'bx-hide' icon
+                element.textContent = "�"; // Or change to 'bx-hide' icon
             } else {
                 input.type = "password";
                 element.textContent = "👁️"; // Or change to 'bx-show' icon
@@ -446,10 +445,11 @@ session_start();
                         if (result.success) {
                             displayMessage(result.message, 'success');
                             // Optional: Clear form fields on successful registration
-                            // registrationForm.reset();
-                            // fileUploadNameSpan.textContent = 'Upload Profile Picture (Optional)';
+                            registrationForm.reset(); // Reset the form fields
+                            fileUploadNameSpan.textContent = 'Upload Profile Picture (Optional)'; // Reset file upload text
                             setTimeout(() => {
-                                window.location.href = 'login.php'; // Redirect to login page after success
+                                // Redirect to verify.php with email for seamless verification flow
+                                window.location.href = 'verify-page.php?email=' + encodeURIComponent(formData.get('email'));
                             }, 2000); // Give user time to read success message
                         } else {
                             displayMessage(result.message, 'error');

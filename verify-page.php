@@ -1,72 +1,113 @@
 <?php
-// verify.php
+// verify-page.php
+
+// Start output buffering at the very beginning to capture any unwanted output
+ob_start();
+
 session_start(); // Start the session at the very beginning of the page
 
-// Include the database connection file
-require_once 'database.php'; // Adjust path if necessary, e.g., '../config/db_connect.php'
+// Set error reporting for debugging (REMOVE OR SET TO 0 IN PRODUCTION)
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 
-// Initialize variables for email from URL and messages
-$emailFromUrl = $_GET['email'] ?? '';
-$formMessage = ''; // Message to display on the form itself (e.g., "Email missing...")
+// Function to send JSON response and exit
+// This function will also clear any buffered output before sending JSON
+function sendJsonResponse($success, $message, $errorDetails = null) {
+    // Clear any previously buffered output to ensure only JSON is sent
+    ob_clean();
 
-// Handle POST request for code verification
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    header('Content-Type: application/json'); // Set header for JSON response
+    // Set header for JSON response
+    header('Content-Type: application/json');
 
-    $verificationCode = trim($_POST['verification_code'] ?? '');
-    $email = trim($_POST['email'] ?? ''); // Get email from the hidden input field
-
-    // Server-side validation
-    if (empty($verificationCode) || empty($email)) {
-        echo json_encode(['success' => false, 'message' => 'Both email and verification code are required.']);
-        exit();
+    $response = ['success' => $success, 'message' => $message];
+    if ($errorDetails && !$success) { // Only log error details if it's an error response
+        error_log("Verification Error: " . $message . " Details: " . (is_array($errorDetails) ? json_encode($errorDetails) : $errorDetails));
     }
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        echo json_encode(['success' => false, 'message' => 'Invalid email format.']);
-        exit();
+    echo json_encode($response);
+    exit();
+}
+
+// --- Main execution block ---
+try {
+    // Include the database connection file
+    if (!file_exists('database.php')) {
+        sendJsonResponse(false, 'Database connection file not found. Please ensure "database.php" exists.');
+    }
+    require_once 'database.php'; // Adjust path if necessary, e.g., '../config/database.php'
+
+    // Check if the connection object ($link) is actually available and valid
+    if (!isset($link) || $link->connect_error) {
+        sendJsonResponse(false, 'Failed to connect to the database. Please check database.php configuration.', $link->connect_error ?? 'Connection object not set.');
     }
 
-    // Check if the provided code matches the user's unverified account
-    $stmt = $conn->prepare("SELECT student_id FROM Students WHERE email = ? AND verification_code = ? AND is_verified = 0 AND verification_code_expiry > NOW()");
-    if ($stmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database query preparation failed: ' . $conn->error]);
-        exit();
-    }
+    // Initialize variables for email from URL and messages
+    $emailFromUrl = $_GET['email'] ?? '';
+    $formMessage = ''; // Message to display on the form itself (e.g., "Email missing...")
 
-    $stmt->bind_param("ss", $email, $verificationCode);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $user = $result->fetch_assoc();
-    $stmt->close();
+    // Handle POST request for code verification
+    if ($_SERVER["REQUEST_METHOD"] == "POST") {
+        // We no longer need header('Content-Type: application/json'); here, as sendJsonResponse handles it.
 
-    if ($user) {
-        // Code is valid and not expired, activate the account
-        $updateStmt = $conn->prepare("UPDATE Students SET is_verified = 1, verification_code = NULL, verification_code_expiry = NULL WHERE student_id = ?");
-        if ($updateStmt === false) {
-            echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $conn->error]);
-            exit();
+        $verificationCode = trim($_POST['verification_code'] ?? '');
+        $email = trim($_POST['email'] ?? ''); // Get email from the hidden input field
+
+        // Server-side validation
+        if (empty($verificationCode) || empty($email)) {
+            sendJsonResponse(false, 'Both email and verification code are required.');
         }
-        $updateStmt->bind_param("i", $user['student_id']);
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            sendJsonResponse(false, 'Invalid email format.');
+        }
 
-        if ($updateStmt->execute()) {
-            echo json_encode(['success' => true, 'message' => 'Account verified successfully! Redirecting to login...']);
+        // Check if the provided code matches the user's unverified account
+        $stmt = $link->prepare("SELECT student_id FROM Students WHERE email = ? AND verification_code = ? AND is_verified = 0 AND verification_code_expiry > NOW()");
+        if ($stmt === false) {
+            sendJsonResponse(false, 'Database query preparation failed: ' . $link->error);
+        }
+
+        $stmt->bind_param("ss", $email, $verificationCode);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $user = $result->fetch_assoc();
+        $stmt->close();
+
+        if ($user) {
+            // Code is valid and not expired, activate the account
+            $updateStmt = $link->prepare("UPDATE Students SET is_verified = 1, verification_code = NULL, verification_code_expiry = NULL WHERE student_id = ?");
+            if ($updateStmt === false) {
+                sendJsonResponse(false, 'Database update preparation failed: ' . $link->error);
+            }
+            $updateStmt->bind_param("i", $user['student_id']);
+
+            if ($updateStmt->execute()) {
+                sendJsonResponse(true, 'Account verified successfully! Redirecting to login...');
+            } else {
+                sendJsonResponse(false, 'Account verification failed: ' . $updateStmt->error);
+            }
+            $updateStmt->close();
         } else {
-            echo json_encode(['success' => false, 'message' => 'Account verification failed: ' . $updateStmt->error]);
+            sendJsonResponse(false, 'Invalid or expired verification code for this email. Please check your email or try resending the code.');
         }
-        $updateStmt->close();
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Invalid or expired verification code for this email. Please check your email or try resending the code.']);
+        // No exit() here, as sendJsonResponse already exits.
     }
-    exit(); // Exit after sending JSON response
-}
 
-// If it's a GET request and email is missing from URL, set a message
-if (empty($emailFromUrl) && $_SERVER["REQUEST_METHOD"] == "GET") {
-    $formMessage = 'Email missing from URL. Please go back to registration or login if you haven\'t received a code.';
-}
+    // If it's a GET request and email is missing from URL, set a message
+    if (empty($emailFromUrl) && $_SERVER["REQUEST_METHOD"] == "GET") {
+        $formMessage = 'Email missing from URL. Please go back to registration or login if you haven\'t received a code.';
+    }
 
-// Close the database connection (only if it's not an AJAX POST request that exited earlier)
-$conn->close();
+} catch (Throwable $e) {
+    // Catch any unexpected PHP errors/exceptions
+    sendJsonResponse(false, 'An unexpected server error occurred: ' . $e->getMessage(), ['file' => $e->getFile(), 'line' => $e->getLine(), 'trace' => $e->getTraceAsString()]);
+} finally {
+    // Close the database connection if it was opened
+    if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+        $link->close();
+    }
+    // End output buffering for GET requests (POST requests exit earlier via sendJsonResponse)
+    ob_end_flush();
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -324,7 +365,7 @@ $conn->close();
             Please enter the code below to activate your account.
         </p>
 
-        <form id="verificationForm" action="verify.php" method="post">
+        <form id="verificationForm" action="verify-page.php" method="post">
             <div class="form-message" id="form-message"
                  <?php if (!empty($formMessage)): ?>
                      class="form-message error" style="display:block;"
@@ -377,7 +418,7 @@ $conn->close();
                     verifyButton.disabled = true;
 
                     try {
-                        const response = await fetch('verify.php', {
+                        const response = await fetch('verify-page.php', { // Corrected fetch URL
                             method: 'POST',
                             body: formData
                         });

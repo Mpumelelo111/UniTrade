@@ -1,9 +1,41 @@
 <?php
 // edit_item.php
+
+// Start output buffering at the very beginning to capture any unwanted output
+ob_start();
+
 session_start(); // Start the session
+
+// Set error reporting for debugging (show errors directly in browser)
+ini_set('display_errors', 1); // Set to 0 for production
+ini_set('display_startup_errors', 1); // Set to 0 for production
+error_reporting(E_ALL);
 
 // Include the database connection file
 require_once 'database.php'; // Adjust path if necessary
+
+// Use $link instead of $conn for database connection
+// Function to send JSON response and exit
+// This function will also clear any buffered output before sending JSON
+function sendJsonResponse($success, $message, $redirect = null, $errorDetails = null) {
+    // Clear any previously buffered output to ensure only JSON is sent
+    if (ob_get_length()) {
+        ob_clean();
+    }
+
+    // Set header for JSON response
+    header('Content-Type: application/json');
+
+    $response = ['success' => $success, 'message' => $message];
+    if ($redirect) {
+        $response['redirect'] = $redirect;
+    }
+    if ($errorDetails && !$success) { // Only log error details if it's an error response
+        error_log("Edit Item Error: " . $message . " Details: " . (is_array($errorDetails) ? json_encode($errorDetails) : $errorDetails));
+    }
+    echo json_encode($response);
+    exit();
+}
 
 // --- User Authentication Check ---
 // If the user is not logged in or not acting as a seller, redirect them
@@ -14,11 +46,6 @@ if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] !== 'seller') {
 
 $current_user_id = $_SESSION['user_id'];
 $itemData = null; // To store existing item data
-
-// Set header for JSON response if it's an AJAX POST request
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    header('Content-Type: application/json');
-}
 
 // --- Handle GET request (Displaying the form with existing data) ---
 if ($_SERVER["REQUEST_METHOD"] == "GET") {
@@ -31,17 +58,18 @@ if ($_SERVER["REQUEST_METHOD"] == "GET") {
     }
 
     // Fetch existing item data from the database
-    $stmt = $conn->prepare("SELECT item_id, seller_id, title, description, category, price, `condition`, image_urls, status FROM Items WHERE item_id = ? AND seller_id = ?");
+    // Ensure $link is the correct database connection variable from database.php
+    $stmt = $link->prepare("SELECT item_id, seller_id, title, description, category, price, `condition`, image_urls, status FROM Items WHERE item_id = ? AND seller_id = ?");
     if ($stmt === false) {
-        $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Database query preparation failed: ' . $conn->error];
+        $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Database query preparation failed: ' . $link->error];
         header("Location: dashboard.php");
         exit();
     }
-
+    
     $stmt->bind_param("ii", $item_id, $current_user_id);
     $stmt->execute();
     $result = $stmt->get_result();
-
+    
     if ($result->num_rows === 1) {
         $itemData = $result->fetch_assoc();
     } else {
@@ -54,19 +82,24 @@ if ($_SERVER["REQUEST_METHOD"] == "GET") {
 
 // --- Process POST request (Updating the item) ---
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Check if the database connection is available
+    if (!isset($link) || $link->connect_error) {
+        sendJsonResponse(false, 'Failed to connect to the database. Please check database.php configuration.', null, $link->connect_error ?? 'Connection object not set.');
+    }
+
     $item_id = trim($_POST['item_id'] ?? ''); // Get item_id from hidden field
     $title = trim($_POST['title'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $category = trim($_POST['category'] ?? '');
     $price = trim($_POST['price'] ?? '');
     $condition = trim($_POST['condition'] ?? '');
-    $existingImageUrls = trim($_POST['existing_image_urls'] ?? ''); // Get existing image URLs
+    // We will fetch the current image URLs from the DB for server-side processing
+    $existingImageUrlsFromDb = '';
 
     // Re-verify that the item belongs to the current user (security check)
-    $stmt = $conn->prepare("SELECT seller_id, image_urls FROM Items WHERE item_id = ?");
+    $stmt = $link->prepare("SELECT seller_id, image_urls FROM Items WHERE item_id = ?");
     if ($stmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database query preparation failed: ' . $conn->error]);
-        exit();
+        sendJsonResponse(false, 'Database query preparation failed: ' . $link->error);
     }
     $stmt->bind_param("i", $item_id);
     $stmt->execute();
@@ -75,55 +108,57 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $stmt->close();
 
     if (!$dbItem || $dbItem['seller_id'] != $current_user_id) {
-        echo json_encode(['success' => false, 'message' => 'Unauthorized action: Item not found or you do not own it.']);
-        exit();
+        sendJsonResponse(false, 'Unauthorized action: Item not found or you do not own it.');
     }
+
+    $existingImageUrlsFromDb = $dbItem['image_urls']; // Get current image URLs from DB
 
     // --- Server-side validation for updated fields ---
     if (empty($title) || empty($description) || empty($category) || empty($price) || empty($condition)) {
-        echo json_encode(['success' => false, 'message' => 'All fields except images are required.']);
-        exit();
+        sendJsonResponse(false, 'All fields except images are required.');
     }
     if (!is_numeric($price) || $price <= 0) {
-        echo json_encode(['success' => false, 'message' => 'Price must be a positive number.']);
-        exit();
+        sendJsonResponse(false, 'Price must be a positive number.');
     }
     $price = number_format($price, 2, '.', ''); // Format price to 2 decimal places
 
     $allowedCategories = ['Books', 'Electronics', 'Clothing', 'Furniture', 'Stationery', 'Other'];
     if (!in_array($category, $allowedCategories)) {
-        echo json_encode(['success' => false, 'message' => 'Invalid category selected.']);
-        exit();
+        sendJsonResponse(false, 'Invalid category selected.');
     }
 
     $allowedConditions = ['New', 'Used - Like New', 'Used - Good', 'Used - Fair'];
     if (!in_array($condition, $allowedConditions)) {
-        echo json_encode(['success' => false, 'message' => 'Invalid condition selected.']);
-        exit();
+        sendJsonResponse(false, 'Invalid condition selected.');
     }
 
     // --- Handle image updates ---
-    $imageUrls = explode(',', $dbItem['image_urls']); // Start with existing images from DB
+    $imageUrls = explode(',', $existingImageUrlsFromDb); // Start with existing images from DB
     $uploadDir = 'uploads/items/';
+    if (!is_dir($uploadDir)) {
+        if (!mkdir($uploadDir, 0777, true)) {
+            sendJsonResponse(false, 'Failed to create upload directory. Check folder permissions.');
+        }
+    }
 
-    if (isset($_FILES['item_images']) && count($_FILES['item_images']['name'][0]) > 0 && $_FILES['item_images']['error'][0] === UPLOAD_ERR_OK) {
-        // If new files are uploaded, clear old images (or merge based on your strategy)
-        // For simplicity, this example replaces images. A more complex system would manage individual image delete/add.
+    // Corrected condition: Check if new files are actually uploaded (UPLOAD_ERR_NO_FILE means no file was selected)
+    if (isset($_FILES['item_images']) && $_FILES['item_images']['error'][0] !== UPLOAD_ERR_NO_FILE) {
+        // If new files are uploaded, clear old images and process new ones
         $imageUrls = []; // Clear existing images if new ones are uploaded
         $totalFiles = count($_FILES['item_images']['name']);
 
         for ($i = 0; $i < $totalFiles; $i++) {
-            $fileName = $_FILES['item_images']['name'][$i];
-            $fileTmpName = $_FILES['item_images']['tmp_name'][$i];
-            $fileSize = $_FILES['item_images']['size'][$i];
-            $fileError = $_FILES['item_images']['error'][$i];
-            $fileType = $_FILES['item_images']['type'][$i];
+            // Only process if a file was actually uploaded for this index and there's no error
+            if ($_FILES['item_images']['error'][$i] === UPLOAD_ERR_OK) {
+                $fileName = $_FILES['item_images']['name'][$i];
+                $fileTmpName = $_FILES['item_images']['tmp_name'][$i];
+                $fileSize = $_FILES['item_images']['size'][$i];
+                $fileType = $_FILES['item_images']['type'][$i];
 
-            $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-            $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif'];
+                $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif'];
 
-            if (in_array($fileExt, $allowedExtensions)) {
-                if ($fileError === 0) {
+                if (in_array($fileExt, $allowedExtensions)) {
                     if ($fileSize < 5000000) { // Max file size: 5MB
                         $newFileName = uniqid('', true) . '.' . $fileExt;
                         $fileDestination = $uploadDir . $newFileName;
@@ -131,56 +166,55 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         if (move_uploaded_file($fileTmpName, $fileDestination)) {
                             $imageUrls[] = $fileDestination;
                         } else {
-                            echo json_encode(['success' => false, 'message' => 'Failed to move uploaded file ' . $fileName . '.']);
-                            exit();
+                            sendJsonResponse(false, 'Failed to move uploaded file ' . htmlspecialchars($fileName) . '. Check folder permissions.');
                         }
                     } else {
-                        echo json_encode(['success' => false, 'message' => 'File ' . $fileName . ' is too large (max 5MB).']);
-                        exit();
+                        sendJsonResponse(false, 'File ' . htmlspecialchars($fileName) . ' is too large (max 5MB).');
                     }
                 } else {
-                    echo json_encode(['success' => false, 'message' => 'Error uploading file ' . $fileName . '. Error code: ' . $fileError]);
-                    exit();
+                    sendJsonResponse(false, 'Invalid file type for ' . htmlspecialchars($fileName) . '. Only JPG, JPEG, PNG, GIF allowed.');
                 }
-            } else {
-                echo json_encode(['success' => false, 'message' => 'Invalid file type for ' . $fileName . '. Only JPG, JPEG, PNG, GIF allowed.']);
-                exit();
+            } elseif ($_FILES['item_images']['error'][$i] !== UPLOAD_ERR_NO_FILE) {
+                // Handle other upload errors for this specific file, but ignore UPLOAD_ERR_NO_FILE
+                sendJsonResponse(false, 'Error uploading file ' . htmlspecialchars($_FILES['item_images']['name'][$i]) . '. Error code: ' . $_FILES['item_images']['error'][$i]);
             }
         }
-    } else if (empty($existingImageUrls) && empty($imageUrls)) {
-        // If no new images and no existing images (and images are mandatory)
-        // Adjust this if images are optional or if you want to explicitly allow no images
-        // echo json_encode(['success' => false, 'message' => 'At least one image is required.']);
-        // exit();
+    } else if (empty($imageUrls)) {
+        // If no new images are uploaded AND there were no existing images, and images are mandatory
+        // Uncomment the line below if at least one image is always required
+        // sendJsonResponse(false, 'At least one image is required.');
     }
-
 
     $imageUrlsString = implode(',', $imageUrls); // Update the string for database
 
     // --- Update item in database ---
-    $stmt = $conn->prepare("UPDATE Items SET title = ?, description = ?, category = ?, price = ?, `condition` = ?, image_urls = ? WHERE item_id = ? AND seller_id = ?");
+    $stmt = $link->prepare("UPDATE Items SET title = ?, description = ?, category = ?, price = ?, `condition` = ?, image_urls = ? WHERE item_id = ? AND seller_id = ?");
     if ($stmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $conn->error]);
-        exit();
+        sendJsonResponse(false, 'Database update preparation failed: ' . $link->error);
     }
 
     $stmt->bind_param("sssdssii", $title, $description, $category, $price, $condition, $imageUrlsString, $item_id, $current_user_id);
 
     if ($stmt->execute()) {
-        echo json_encode(['success' => true, 'message' => 'Item updated successfully!', 'redirect' => 'dashboard.php']);
+        sendJsonResponse(true, 'Item updated successfully!', 'dashboard.php');
     } else {
-        echo json_encode(['success' => false, 'message' => 'Failed to update item: ' . $stmt->error]);
+        sendJsonResponse(false, 'Failed to update item: ' . $stmt->error);
     }
     $stmt->close();
-    exit(); // Exit after sending JSON response
+    // sendJsonResponse already exits, so no need for exit() here.
 }
 
 // Close the database connection (only if it's not an AJAX POST request that exited earlier)
-$conn->close();
+if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+    $link->close();
+}
 
 // Retrieve any messages set in the session (e.g., from GET redirect)
 $displayMessage = $_SESSION['form_message'] ?? null;
 unset($_SESSION['form_message']); // Clear the message after displaying
+
+// End output buffering and send the content to the browser for GET requests
+ob_end_flush();
 ?>
 <!DOCTYPE html>
 <html lang="en">

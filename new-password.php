@@ -1,9 +1,17 @@
 <?php
 // set_new_password.php
+// Start output buffering at the very beginning to capture any unwanted output
+ob_start();
+
 session_start(); // Start the session (though not strictly necessary for this specific page, good habit)
 
+// Set error reporting for debugging
+ini_set('display_errors', 1); // Temporarily set to 1 for debugging - IMPORTANT!
+ini_set('display_startup_errors', 1); // Temporarily set to 1 for debugging - IMPORTANT!
+error_reporting(E_ALL);
+
 // Include the database connection file
-require_once 'database.php'; // Adjust path if necessary
+require_once 'database.php'; // Adjust path if necessary (e.g., 'db_connect.php' or 'database.php')
 
 // Initialize variables for email and verification code from GET request
 $email = $_GET['email'] ?? '';
@@ -19,11 +27,10 @@ if ($_SERVER["REQUEST_METHOD"] == "GET") {
         $errorMessage = 'Invalid password reset link. Missing email or verification code.';
     } else {
         // Prepare statement to check if the email and code exist and are valid/not expired
-        // Assuming your 'Students' table has 'email', 'verification_code', and 'verification_code_expiry' columns
-        // 'verification_code_expiry' should store a timestamp (e.g., DATETIME)
-        $stmt = $conn->prepare("SELECT student_id FROM Students WHERE email = ? AND verification_code = ? AND verification_code_expiry > NOW()");
+        // Using $link for database connection
+        $stmt = $link->prepare("SELECT student_id FROM Students WHERE email = ? AND verification_code = ? AND verification_code_expiry > NOW()");
         if ($stmt === false) {
-            $errorMessage = 'Database query preparation failed: ' . $conn->error;
+            $errorMessage = 'Database query preparation failed: ' . $link->error;
         } else {
             $stmt->bind_param("ss", $email, $verificationCode);
             $stmt->execute();
@@ -48,7 +55,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $codeFromForm = $_POST['code_from_form'] ?? ''; // Hidden field to pass code
 
     // Re-validate the link parameters, just in case
-    $stmt = $conn->prepare("SELECT student_id FROM Students WHERE email = ? AND verification_code = ? AND verification_code_expiry > NOW()");
+    // Using $link for database connection
+    $stmt = $link->prepare("SELECT student_id FROM Students WHERE email = ? AND verification_code = ? AND verification_code_expiry > NOW()");
     if ($stmt === false) {
         echo json_encode(['success' => false, 'message' => 'Database query preparation failed.']);
         exit();
@@ -82,9 +90,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
 
     // Update the user's password and clear the verification code/expiry
-    $stmt = $conn->prepare("UPDATE Students SET password_hash = ?, verification_code = NULL, verification_code_expiry = NULL WHERE student_id = ?");
+    // Using $link for database connection
+    $stmt = $link->prepare("UPDATE Students SET password_hash = ?, verification_code = NULL, verification_code_expiry = NULL WHERE student_id = ?");
     if ($stmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $conn->error]);
+        echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $link->error]);
         exit();
     }
     $studentId = $user['student_id'];
@@ -100,7 +109,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 
 // Close the database connection (only if it's not an AJAX POST request that exited earlier)
-$conn->close();
+// Using $link for database connection
+if (isset($link) && is_object($link) && method_exists($link, 'close')) {
+    $link->close();
+}
+
+// End output buffering and send the content to the browser for GET requests
+ob_end_flush();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -203,6 +218,14 @@ $conn->close();
             margin-bottom: 15px;
             font-size: 0.9em;
         }
+
+        .success-text { /* Added for success messages */
+            color: #2ecc71; /* Green for success */
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
 
         .input-box {
             display: flex;
@@ -362,7 +385,7 @@ $conn->close();
     </nav>
 
     <div class="wrapper">
-        <form action="set_new_password.php" method="post" id="setPasswordForm">
+        <form action="new-password.php" method="post" id="setPasswordForm">
             <h2>Set New Password</h2>
             <div class="error-text" id="error-text" style="display:none;">
                 <?php echo htmlspecialchars($errorMessage); ?>
@@ -410,7 +433,7 @@ $conn->close();
             const input = document.getElementById(id);
             if (input.type === "password") {
                 input.type = "text";
-                element.textContent = "�"; // Or change to 'bx-hide' icon
+                element.textContent = "🙈"; // Or change to 'bx-hide' icon
             } else {
                 input.type = "password";
                 element.textContent = "👁️"; // Or change to 'bx-show' icon
@@ -451,7 +474,7 @@ $conn->close();
                     try {
                         const formData = new FormData(setPasswordForm);
 
-                        const response = await fetch('set_new_password.php', {
+                        const response = await fetch('new-password.php', {
                             method: 'POST',
                             body: formData
                         });

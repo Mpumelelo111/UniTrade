@@ -23,9 +23,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 
 // --- Fetch User Data for Display ---
-$stmt = $conn->prepare("SELECT full_name, student_number, email, phone_number, profile_pic_url FROM Students WHERE student_id = ?");
+$stmt = $link->prepare("SELECT full_name, student_number, email, phone_number, profile_pic_url FROM Students WHERE student_id = ?");
 if ($stmt === false) {
-    $errorMessage = 'Database query preparation failed: ' . $conn->error;
+    $errorMessage = 'Database query preparation failed: ' . $link->error;
 } else {
     $stmt->bind_param("i", $current_user_id);
     $stmt->execute();
@@ -107,9 +107,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 
     // --- Update user data in database ---
-    $updateStmt = $conn->prepare("UPDATE Students SET full_name = ?, phone_number = ?, profile_pic_url = ? WHERE student_id = ?");
+    $updateStmt = $link->prepare("UPDATE Students SET full_name = ?, phone_number = ?, profile_pic_url = ? WHERE student_id = ?");
     if ($updateStmt === false) {
-        echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $conn->error]);
+        echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $link->error]);
         exit();
     }
 
@@ -127,7 +127,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 
 // Close the database connection (only for GET requests, POST requests would have exited)
-$conn->close();
+$link->close();
 ?>
 <!DOCTYPE html>
 <html lang="en">
