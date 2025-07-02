@@ -3,6 +3,7 @@
 session_start(); // Start the session
 
 // Set error reporting for debugging - IMPORTANT!
+// Keep these for general page debugging, but output buffering will handle AJAX responses.
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
@@ -22,37 +23,11 @@ $userData = null; // To store fetched user data
 $errorMessage = '';
 $successMessage = '';
 
-// --- Fetch User Data for Display ---
-// Using $link for database connection
-$stmt = $link->prepare("SELECT full_name, student_number, email, phone_number, profile_pic_url FROM Students WHERE student_id = ?");
-if ($stmt === false) {
-    $errorMessage = 'Database query preparation failed: ' . $link->error;
-} else {
-    $stmt->bind_param("i", $current_user_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    if ($result->num_rows === 1) {
-        $userData = $result->fetch_assoc();
-    } else {
-        // This case should ideally not happen if user is logged in, but handle defensively
-        session_unset();
-        session_destroy();
-        header("Location: login.php?error=user_not_found");
-        exit();
-    }
-    $stmt->close();
-}
-
-// TEMPORARY DEBUGGING: Output the profile picture URL for inspection in page source
-if ($userData && isset($userData['profile_pic_url'])) {
-    echo "<!-- Debug: Profile Pic URL: " . htmlspecialchars($userData['profile_pic_url']) . " -->";
-} else {
-    echo "<!-- Debug: Profile Pic URL: Not set or user data not found. Defaulting to assets/default_profile.png -->";
-}
-// END TEMPORARY DEBUGGING
-
 // --- Process POST request (Updating Profile) ---
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Start output buffering to capture any unwanted output before JSON
+    ob_start();
+
     // Set header for JSON response (only for POST requests)
     header('Content-Type: application/json');
 
@@ -62,10 +37,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
     // Server-side validation
     if (empty($newFullName) || empty($newPhoneNumber)) {
+        // Clear buffer and send JSON
+        ob_clean();
         echo json_encode(['success' => false, 'message' => 'Full Name and Phone Number are required.']);
         exit();
     }
     if (!preg_match('/^\d{10}$/', $newPhoneNumber)) { // Basic 10-digit phone number check
+        // Clear buffer and send JSON
+        ob_clean();
         echo json_encode(['success' => false, 'message' => 'Invalid phone number format (e.g., 0123456789).']);
         exit();
     }
@@ -76,6 +55,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if (!is_dir($uploadDir)) {
         // Attempt to create directory with more robust error handling
         if (!mkdir($uploadDir, 0777, true)) { // 0777 for testing, consider 0755 or 0770 for production
+            // Clear buffer and send JSON
+            ob_clean();
             echo json_encode(['success' => false, 'message' => 'Failed to create upload directory. Check server permissions.']);
             exit();
         }
@@ -112,18 +93,26 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     } else {
                         // Log the error for debugging
                         error_log("Failed to move uploaded file: " . $fileTmpName . " to " . $fileDestination . " (Error: " . error_get_last()['message'] . ")");
+                        // Clear buffer and send JSON
+                        ob_clean();
                         echo json_encode(['success' => false, 'message' => 'Failed to move uploaded profile picture. Check server logs for details.']);
                         exit();
                     }
                 } else {
+                    // Clear buffer and send JSON
+                    ob_clean();
                     echo json_encode(['success' => false, 'message' => 'Profile picture is too large (max 5MB).']);
                     exit();
                 }
             } else {
+                // Clear buffer and send JSON
+                ob_clean();
                 echo json_encode(['success' => false, 'message' => 'Error uploading profile picture. Error code: ' . $fileError]);
                 exit();
             }
         } else {
+            // Clear buffer and send JSON
+            ob_clean();
             echo json_encode(['success' => false, 'message' => 'Invalid profile picture file type. Only JPG, JPEG, PNG, GIF allowed.']);
             exit();
         }
@@ -133,6 +122,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // Using $link for database connection
     $updateStmt = $link->prepare("UPDATE Students SET full_name = ?, phone_number = ?, profile_pic_url = ? WHERE student_id = ?");
     if ($updateStmt === false) {
+        // Clear buffer and send JSON
+        ob_clean();
         echo json_encode(['success' => false, 'message' => 'Database update preparation failed: ' . $link->error]);
         exit();
     }
@@ -142,13 +133,46 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if ($updateStmt->execute()) {
         // Update session variable if name changed
         $_SESSION['full_name'] = $newFullName;
+        // Clear buffer and send JSON
+        ob_clean();
         echo json_encode(['success' => true, 'message' => 'Profile updated successfully!', 'profile_pic_url' => $profilePicToSave]);
     } else {
+        // Clear buffer and send JSON
+        ob_clean();
         echo json_encode(['success' => false, 'message' => 'Failed to update profile: ' . $updateStmt->error]);
     }
     $updateStmt->close();
     exit(); // Exit after sending JSON response
 }
+
+// --- Fetch User Data for Display (GET request) ---
+// This part runs only if it's not a POST request, so no ob_start/ob_clean needed here.
+$stmt = $link->prepare("SELECT full_name, student_number, email, phone_number, profile_pic_url FROM Students WHERE student_id = ?");
+if ($stmt === false) {
+    $errorMessage = 'Database query preparation failed: ' . $link->error;
+} else {
+    $stmt->bind_param("i", $current_user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    if ($result->num_rows === 1) {
+        $userData = $result->fetch_assoc();
+    } else {
+        // This case should ideally not happen if user is logged in, but handle defensively
+        session_unset();
+        session_destroy();
+        header("Location: login.php?error=user_not_found");
+        exit();
+    }
+    $stmt->close();
+}
+
+// TEMPORARY DEBUGGING: Output the profile picture URL for inspection in page source
+if ($userData && isset($userData['profile_pic_url'])) {
+    echo "<!-- Debug: Profile Pic URL from DB: " . htmlspecialchars($userData['profile_pic_url']) . " -->";
+} else {
+    echo "<!-- Debug: Profile Pic URL from DB: Not set or user data not found. -->";
+}
+// END TEMPORARY DEBUGGING
 
 // Close the database connection (only for GET requests, POST requests would have exited)
 // Using $link for database connection
@@ -491,7 +515,7 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
 
         <?php if ($userData): ?>
             <div class="profile-pic-area">
-               <img src="<?php
+                <img src="<?php
                     $default = 'assets/default_profile.png';
                     $pic = !empty($userData['profile_pic_url']) ? $userData['profile_pic_url'] : $default;
                     
@@ -623,23 +647,32 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                             body: formData
                         });
 
-                        const result = await response.json(); // Assuming PHP returns JSON
+                        // IMPORTANT: Check if the response is valid JSON before parsing
+                        const contentType = response.headers.get("content-type");
+                        if (contentType && contentType.indexOf("application/json") !== -1) {
+                            const result = await response.json(); // Assuming PHP returns JSON
 
-                        if (result.success) {
-                            displayMessage(result.message, 'success');
-                            // Update the displayed profile picture if it changed
-                            if (result.profile_pic_url) {
-                                profilePicDisplay.src = result.profile_pic_url;
-                                // Also update the hidden field for future submissions
-                                profileForm.querySelector('input[name="existing_profile_pic_url"]').value = result.profile_pic_url;
+                            if (result.success) {
+                                displayMessage(result.message, 'success');
+                                // Update the displayed profile picture if it changed
+                                if (result.profile_pic_url) {
+                                    profilePicDisplay.src = result.profile_pic_url;
+                                    // Also update the hidden field for future submissions
+                                    profileForm.querySelector('input[name="existing_profile_pic_url"]').value = result.profile_pic_url;
+                                }
+                                // No redirect, stay on profile page with updated data
+                            } else {
+                                displayMessage(result.message, 'error');
                             }
-                            // No redirect, stay on profile page with updated data
                         } else {
-                            displayMessage(result.message, 'error');
+                            // If response is not JSON, it indicates an unexpected output from PHP
+                            const errorText = await response.text();
+                            console.error('Server response was not JSON:', errorText);
+                            displayMessage('An unexpected server response was received. Please check server logs.', 'error');
                         }
 
                     } catch (error) {
-                        console.error('Error updating profile:', error);
+                        console.error('Error updating profile:', error.name, error.message, error); // Log more details
                         displayMessage('An unexpected error occurred. Please try again.', 'error');
                     } finally {
                         submitButton.textContent = originalButtonText;

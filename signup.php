@@ -12,7 +12,7 @@ use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 use PHPMailer\PHPMailer\SMTP;
 
-// Error reporting for debugging (REMOVE OR SET TO 0 IN PRODUCTION)
+// Error reporting for debugging (IMPORTANT: REMOVE OR SET TO 0 IN PRODUCTION)
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
@@ -38,6 +38,7 @@ function sendJsonResponse($success, $message, $errorDetails = null) {
 
     $response = ['success' => $success, 'message' => $message];
     if ($errorDetails && !$success) { // Only log error details if it's an error response
+        // Log to server's error log for detailed debugging
         error_log("Signup Error: " . $message . " Details: " . (is_array($errorDetails) ? json_encode($errorDetails) : $errorDetails));
     }
     echo json_encode($response);
@@ -64,6 +65,10 @@ try {
 
     // 3. Process Form Submission only if it's a POST request
     if ($_SERVER["REQUEST_METHOD"] == "POST") {
+        // Debugging: Log all received POST data and FILES data
+        error_log("Received POST data: " . print_r($_POST, true));
+        error_log("Received FILES data: " . print_r($_FILES, true));
+
         // Sanitize and get input data
         $fullName = trim($_POST['Full-Name'] ?? '');
         $studentNumber = trim($_POST['Student_Number'] ?? '');
@@ -112,8 +117,11 @@ try {
         if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] == UPLOAD_ERR_OK) {
             $targetDir = "uploads/profiles/"; // Consistent with profile.php
             if (!is_dir($targetDir)) {
-                if (!mkdir($targetDir, 0755, true)) {
+                error_log("Upload directory does not exist: " . $targetDir . ". Attempting to create.");
+                if (!mkdir($targetDir, 0755, true)) { // 0755 is a common permission, adjust if needed
                     sendJsonResponse(false, 'Failed to create upload directory. Check folder permissions.');
+                } else {
+                    error_log("Upload directory created: " . $targetDir);
                 }
             }
 
@@ -124,18 +132,41 @@ try {
                 $fileName = uniqid('profile_') . '.' . $imageFileType;
                 $targetFilePath = $targetDir . $fileName;
 
-                if (!move_uploaded_file($_FILES['profile_pic']['tmp_name'], $targetFilePath)) {
-                    sendJsonResponse(false, 'Failed to upload profile picture. Check folder permissions or file size.');
+                error_log("Attempting to move uploaded file from: " . $_FILES['profile_pic']['tmp_name'] . " to: " . $targetFilePath);
+                if (move_uploaded_file($_FILES['profile_pic']['tmp_name'], $targetFilePath)) {
+                    $profilePicUrl = $targetFilePath;
+                    error_log("Profile picture successfully uploaded to: " . $profilePicUrl);
+                } else {
+                    $lastError = error_get_last();
+                    sendJsonResponse(false, 'Failed to upload profile picture. Check folder permissions or file size. Error: ' . ($lastError['message'] ?? 'Unknown error'));
                 }
-                $profilePicUrl = $targetFilePath;
             } else {
                 sendJsonResponse(false, 'Invalid file type for profile picture. Only JPG, JPEG, PNG, GIF are allowed.');
             }
+        } else if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] != UPLOAD_ERR_NO_FILE) {
+            // Handle specific upload errors if a file was attempted to be uploaded but failed
+            $phpFileUploadErrors = array(
+                UPLOAD_ERR_INI_SIZE   => 'The uploaded file exceeds the upload_max_filesize directive in php.ini.',
+                UPLOAD_ERR_FORM_SIZE  => 'The uploaded file exceeds the MAX_FILE_SIZE directive that was specified in the HTML form.',
+                UPLOAD_ERR_PARTIAL    => 'The uploaded file was only partially uploaded.',
+                UPLOAD_ERR_NO_FILE    => 'No file was uploaded.',
+                UPLOAD_ERR_NO_TMP_DIR => 'Missing a temporary folder.',
+                UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
+                UPLOAD_ERR_EXTENSION  => 'A PHP extension stopped the file upload.',
+            );
+            $errorMsg = $phpFileUploadErrors[$_FILES['profile_pic']['error']] ?? 'Unknown upload error.';
+            sendJsonResponse(false, 'Profile picture upload error: ' . $errorMsg);
+        } else {
+            error_log("No profile picture was uploaded or UPLOAD_ERR_NO_FILE occurred. profilePicUrl remains null.");
         }
+
 
         // Generate verification code and expiry
         $verificationCode = generateVerificationCode();
         $verificationCodeExpiry = date('Y-m-d H:i:s', strtotime('+1 hour')); // Token valid for 1 hour
+
+        // Debugging: Log the profile picture URL before binding to the SQL statement
+        error_log("Profile Pic URL to be inserted into DB: " . ($profilePicUrl ?? 'NULL'));
 
         // Prepare and execute the SQL INSERT statement
         $stmt = $link->prepare("INSERT INTO Students (full_name, student_number, email, phone_number, password_hash, profile_pic_url, is_verified, verification_code, verification_code_expiry) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -146,6 +177,7 @@ try {
         $stmt->bind_param("sssssisss", $fullName, $studentNumber, $email, $phone, $passwordHash, $profilePicUrl, $isVerified, $verificationCode, $verificationCodeExpiry);
 
         if ($stmt->execute()) {
+            error_log("Student data successfully inserted into database. Student ID: " . $link->insert_id);
             // --- Sending Verification Email ---
             $mail = new PHPMailer(true);
             try {
@@ -201,7 +233,11 @@ try {
 
         $stmt->close();
     } else {
-        sendJsonResponse(false, 'Invalid request method. Only POST requests are allowed.');
+        // For GET requests, if the file is accessed directly, it should not process form logic
+        // This part is typically for displaying the signup form HTML, not for AJAX responses.
+        // If this file is only meant for AJAX, then this block can be removed or handle a simple message.
+        // For now, we'll just send a general error for non-POST requests if this is an API endpoint.
+        sendJsonResponse(false, 'Invalid request method. Only POST requests are allowed for registration.');
     }
 
 } catch (Throwable $e) {
