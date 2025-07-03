@@ -29,14 +29,13 @@ $current_student_number = $_SESSION['student_number']; // Assuming this is also 
 
 // --- Fetch User Profile Picture URL from Database ---
 $profilePicUrl = 'assets/default_profile.png'; // Default profile picture
-// Removed $dbProfilePicValue debug variable
+// REVERTED: Changed $conn back to $link for database connection
 $stmt = $link->prepare("SELECT profile_pic_url FROM Students WHERE student_id = ?");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
     $stmt->execute();
     $result = $stmt->get_result();
     if ($row = $result->fetch_assoc()) {
-        // Removed assignment to $dbProfilePicValue
         if (!empty($row['profile_pic_url'])) {
             $profilePicUrl = htmlspecialchars($row['profile_pic_url']);
         }
@@ -44,6 +43,7 @@ if ($stmt) {
     $stmt->close();
 } else {
     // Log database error for debugging
+    // REVERTED: Changed $conn->error back to $link->error
     error_log("Error preparing profile pic query: " . $link->error);
 }
 
@@ -71,6 +71,7 @@ $userListings = []; // For seller view (current user's products)
 
 if ($current_role === 'buyer') {
     // Fetch all active products for the buyer view, INCLUDING seller_id
+    // REVERTED: Changed $conn back to $link
     $stmt = $link->prepare("SELECT item_id, title, description, price, rating, image_urls, seller_id FROM Items WHERE status = 'Available' ORDER BY posted_at DESC");
     if ($stmt) {
         $stmt->execute();
@@ -80,10 +81,12 @@ if ($current_role === 'buyer') {
         }
         $stmt->close();
     } else {
+        // REVERTED: Changed $conn->error back to $link->error
         error_log("Error preparing products query for buyer: " . $link->error);
     }
 } else { // 'seller' role
     // Fetch products listed by the current user
+    // REVERTED: Changed $conn back to $link
     $stmt = $link->prepare("SELECT item_id, title, description, price, rating, image_urls, status FROM Items WHERE seller_id = ? ORDER BY posted_at DESC");
     if ($stmt) {
         $stmt->bind_param("i", $current_user_id);
@@ -94,6 +97,7 @@ if ($current_role === 'buyer') {
         }
         $stmt->close();
     } else {
+        // REVERTED: Changed $conn->error back to $link->error
         error_log("Error preparing user listings query for seller: " . $link->error);
     }
 }
@@ -104,6 +108,7 @@ $itemsSold = 0;
 $pendingOrders = 0;
 
 // Get items listed by the current user
+// REVERTED: Changed $conn back to $link
 $stmt = $link->prepare("SELECT COUNT(*) AS total_listed FROM Items WHERE seller_id = ?");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -115,8 +120,10 @@ if ($stmt) {
     $stmt->close();
 }
 
+
 // Get items sold by the current user (requires Transactions table)
 // This counts 'Completed' transactions where the current user is the seller
+// REVERTED: Changed $conn back to $link
 $stmt = $link->prepare("SELECT COUNT(*) AS total_sold FROM Transactions WHERE seller_id = ? AND status = 'Completed'");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -131,6 +138,7 @@ if ($stmt) {
 
 // Get pending orders for the current user (if they are a seller)
 // This counts 'Pending Payment' transactions where the current user is the seller
+// REVERTED: Changed $conn back to $link
 $stmt = $link->prepare("SELECT COUNT(*) AS total_pending FROM Transactions WHERE seller_id = ? AND status = 'Pending Payment'");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -143,6 +151,7 @@ if ($stmt) {
 }
 
 // Close the database connection
+// REVERTED: Changed $conn back to $link
 if (isset($link) && is_object($link) && method_exists($link, 'close')) {
     $link->close();
 }
@@ -185,11 +194,11 @@ ob_end_flush();
             align-items: center;
             position: relative;
             box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
-            border: 2px solid #4a90e2;
-            padding: 0 20px;
-            box-sizing: border-box;
-            margin-bottom: 40px;
-            flex-shrink: 0;
+            border: 2px solid #4a90e2; /* Blue border like the image */
+            padding: 0 20px; /* Padding inside the nav bar */
+            box-sizing: border-box; /* Include padding in width */
+            margin-bottom: 40px; /* Space between nav and form */
+            flex-shrink: 0; /* Prevent it from shrinking */
         }
 
         .nav-center {
@@ -587,20 +596,64 @@ ob_end_flush();
         }
 
         /* Responsive Adjustments */
+        /* Hamburger menu icon - Hidden by default on desktop */
+        .hamburger-menu {
+            display: none; /* Hidden on desktop */
+        }
+
         @media (max-width: 768px) {
             .circular-nav {
                 height: 50px;
                 padding: 0 15px;
+                /* Allow content to wrap if needed */
+                flex-wrap: wrap;
+                justify-content: space-between; /* Keep Unitrade and hamburger at ends */
+                align-items: center;
             }
             .nav-center {
                 font-size: 1.3em;
+                order: 1; /* Keep Unitrade first */
             }
             .nav-right {
-                gap: 15px;
+                display: none; /* Hide desktop nav links by default on mobile */
+                flex-direction: column; /* Stack links vertically when shown */
+                width: 100%; /* Take full width for dropdown */
+                background-color: #2c2c2c; /* Background for dropdown */
+                position: absolute; /* Position below nav */
+                top: 60px; /* Below the nav bar */
+                left: 0;
+                border-radius: 0 0 15px 15px;
+                box-shadow: 0 8px 15px rgba(0, 0, 0, 0.4);
+                padding: 10px 0;
+                z-index: 1000; /* Ensure it's above other content */
+                gap: 5px; /* Smaller gap for stacked links */
+                border-top: 1px solid #4a90e2; /* Separator line */
+                overflow: hidden; /* Hide overflow when not active */
+                max-height: 0; /* Initially hidden */
+                transition: max-height 0.3s ease-out, padding 0.3s ease-out; /* Smooth transition */
             }
+
+            .nav-right.active {
+                display: flex; /* Show when active */
+                max-height: 200px; /* Adjust based on number of links */
+                padding: 10px 0;
+            }
+
             .nav-link {
                 font-size: 0.9em;
-                padding: 4px 10px;
+                padding: 8px 20px; /* Larger touch targets for mobile */
+                width: calc(100% - 40px); /* Full width with padding */
+                text-align: center;
+            }
+
+            /* Hamburger menu icon */
+            .hamburger-menu {
+                display: block; /* Show hamburger icon on mobile */
+                color: #f0f0f0;
+                font-size: 1.8em;
+                cursor: pointer;
+                padding: 5px;
+                order: 2; /* Keep it on the right */
             }
 
             .dashboard-container {
@@ -633,21 +686,25 @@ ob_end_flush();
 
         @media (max-width: 480px) {
             .circular-nav {
-                height: 45px;
-                padding: 0 10px;
+                height: 45px; /* Slightly smaller height */
+                padding: 0 10px; /* Reduced padding */
             }
             .nav-center {
-                font-size: 1.2em;
+                font-size: 1.2em; /* Smaller font for "Unitrade" */
+                padding-left: 5px; /* Reduced padding */
             }
-            .nav-right {
-                gap: 10px;
+            .hamburger-menu {
+                font-size: 1.6em;
+            }
+            .nav-right.active {
+                top: 45px; /* Adjust dropdown position for smaller nav height */
             }
             .nav-link {
-                font-size: 0.8em;
-                padding: 3px 8px;
+                font-size: 0.8em; /* Smaller font for nav links */
+                padding: 6px 15px; /* Reduced padding for links */
             }
 
-            .wrapper {
+            .dashboard-container {
                 padding: 20px;
             }
 
@@ -662,7 +719,11 @@ ob_end_flush();
         <div class="nav-center">
             Unitrade
         </div>
-        <div class="nav-right">
+        <!-- Hamburger menu icon for mobile -->
+        <div class="hamburger-menu">
+            <i class='bx bx-menu'></i>
+        </div>
+        <div class="nav-right mobile-nav-links">
             <!-- Dynamic navigation links after login -->
             <a href="dashboard.php" class="nav-link">Dashboard</a>
             <a href="profile.php" class="nav-link">Profile</a>
@@ -782,6 +843,7 @@ ob_end_flush();
             <?php else: ?>
                 <p style="text-align: center; color: #ccc;">You haven't listed any items yet. Click "Add New Item" to get started!</p>
             <?php endif; ?>
+
         <?php endif; ?>
 
         <h3 class="dashboard-section-title">Quick Stats</h3>
@@ -792,6 +854,18 @@ ob_end_flush();
         </ul>
 
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const hamburgerMenu = document.querySelector('.hamburger-menu');
+            const navRight = document.querySelector('.nav-right');
+
+            if (hamburgerMenu && navRight) {
+                hamburgerMenu.addEventListener('click', () => {
+                    navRight.classList.toggle('active');
+                });
+            }
+        });
+    </script>
 </body>
 </html>
-

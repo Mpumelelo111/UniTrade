@@ -113,9 +113,13 @@ try {
         // Hash the password
         $passwordHash = password_hash($password, PASSWORD_DEFAULT);
 
+        // --- START OF PROFILE PICTURE UPLOAD FIX ---
         // Handle profile picture upload
-        if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] == UPLOAD_ERR_OK) {
+        if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] != UPLOAD_ERR_NO_FILE) {
+            $file = $_FILES['profile_pic']; // Assign to a local variable for cleaner access
             $targetDir = "uploads/profiles/"; // Consistent with profile.php
+
+            // Ensure upload directory exists
             if (!is_dir($targetDir)) {
                 error_log("Upload directory does not exist: " . $targetDir . ". Attempting to create.");
                 if (!mkdir($targetDir, 0755, true)) { // 0755 is a common permission, adjust if needed
@@ -125,40 +129,50 @@ try {
                 }
             }
 
-            $imageFileType = strtolower(pathinfo($_FILES['profile_pic']['name'], PATHINFO_EXTENSION));
+            // Check for specific upload errors first (before file type/size checks)
+            if ($file['error'] !== UPLOAD_ERR_OK) {
+                $phpFileUploadErrors = array(
+                    UPLOAD_ERR_INI_SIZE   => 'The uploaded file exceeds the upload_max_filesize directive in php.ini.',
+                    UPLOAD_ERR_FORM_SIZE  => 'The uploaded file exceeds the MAX_FILE_SIZE directive that was specified in the HTML form.',
+                    UPLOAD_ERR_PARTIAL    => 'The uploaded file was only partially uploaded.',
+                    UPLOAD_ERR_NO_TMP_DIR => 'Missing a temporary folder.',
+                    UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
+                    UPLOAD_ERR_EXTENSION  => 'A PHP extension stopped the file upload.',
+                );
+                $errorMsg = $phpFileUploadErrors[$file['error']] ?? 'Unknown upload error.';
+                sendJsonResponse(false, 'Profile picture upload error: ' . $errorMsg);
+            }
+
+            $imageFileType = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
             $allowedExtensions = array("jpg", "jpeg", "png", "gif");
 
             if (in_array($imageFileType, $allowedExtensions)) {
-                $fileName = uniqid('profile_') . '.' . $imageFileType;
-                $targetFilePath = $targetDir . $fileName;
+                // Added explicit file size validation
+                if ($file['size'] < 5000000) { // Max file size: 5MB
+                    // Used 'true' for more entropy in uniqid for better uniqueness
+                    $fileName = uniqid('profile_', true) . '.' . $imageFileType;
+                    $targetFilePath = $targetDir . $fileName;
 
-                error_log("Attempting to move uploaded file from: " . $_FILES['profile_pic']['tmp_name'] . " to: " . $targetFilePath);
-                if (move_uploaded_file($_FILES['profile_pic']['tmp_name'], $targetFilePath)) {
-                    $profilePicUrl = $targetFilePath;
-                    error_log("Profile picture successfully uploaded to: " . $profilePicUrl);
+                    error_log("Attempting to move uploaded file from: " . $file['tmp_name'] . " to: " . $targetFilePath);
+                    if (move_uploaded_file($file['tmp_name'], $targetFilePath)) {
+                        $profilePicUrl = $targetFilePath;
+                        error_log("Profile picture successfully uploaded to: " . $profilePicUrl);
+                    } else {
+                        // More detailed error message for move_uploaded_file failure
+                        $lastError = error_get_last();
+                        sendJsonResponse(false, 'Failed to move uploaded profile picture. Check folder permissions or file size. Error: ' . ($lastError['message'] ?? 'Unknown error'));
+                    }
                 } else {
-                    $lastError = error_get_last();
-                    sendJsonResponse(false, 'Failed to upload profile picture. Check folder permissions or file size. Error: ' . ($lastError['message'] ?? 'Unknown error'));
+                    sendJsonResponse(false, 'Profile picture is too large (max 5MB).');
                 }
             } else {
                 sendJsonResponse(false, 'Invalid file type for profile picture. Only JPG, JPEG, PNG, GIF are allowed.');
             }
-        } else if (isset($_FILES['profile_pic']) && $_FILES['profile_pic']['error'] != UPLOAD_ERR_NO_FILE) {
-            // Handle specific upload errors if a file was attempted to be uploaded but failed
-            $phpFileUploadErrors = array(
-                UPLOAD_ERR_INI_SIZE   => 'The uploaded file exceeds the upload_max_filesize directive in php.ini.',
-                UPLOAD_ERR_FORM_SIZE  => 'The uploaded file exceeds the MAX_FILE_SIZE directive that was specified in the HTML form.',
-                UPLOAD_ERR_PARTIAL    => 'The uploaded file was only partially uploaded.',
-                UPLOAD_ERR_NO_FILE    => 'No file was uploaded.',
-                UPLOAD_ERR_NO_TMP_DIR => 'Missing a temporary folder.',
-                UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
-                UPLOAD_ERR_EXTENSION  => 'A PHP extension stopped the file upload.',
-            );
-            $errorMsg = $phpFileUploadErrors[$_FILES['profile_pic']['error']] ?? 'Unknown upload error.';
-            sendJsonResponse(false, 'Profile picture upload error: ' . $errorMsg);
         } else {
+            // This block handles UPLOAD_ERR_NO_FILE or if $_FILES['profile_pic'] is not set
             error_log("No profile picture was uploaded or UPLOAD_ERR_NO_FILE occurred. profilePicUrl remains null.");
         }
+        // --- END OF PROFILE PICTURE UPLOAD FIX ---
 
 
         // Generate verification code and expiry
@@ -200,7 +214,7 @@ try {
                 $verificationLink = $protocol . $host . "/verify-page.php?email=" . urlencode($email) . "&code=" . urlencode($verificationCode);
 
                 // MODIFIED: Explicitly display the verification code in the email body
-                $mail->Body    = '
+                $mail->Body     = '
                     <p>Dear ' . htmlspecialchars($fullName) . ',</p>
                     <p>Thank you for registering with Unitrade. To activate your account, please use the verification code below:</p>
                     <p style="font-size: 1.5em; font-weight: bold; color: #4a90e2; text-align: center; letter-spacing: 2px;">' . htmlspecialchars($verificationCode) . '</p>
@@ -248,5 +262,7 @@ try {
     if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         $link->close();
     }
+    // ob_end_flush() is not needed here as sendJsonResponse always exits after ob_clean().
+    // If this file were also serving HTML for GET requests, ob_end_flush() would be needed outside the POST block.
 }
 ?>

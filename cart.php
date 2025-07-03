@@ -351,7 +351,7 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         }
 
         .checkout-btn {
-            width: 96%;
+            width: 95%;
             padding: 15px;
             background-color: #4a90e2;
             color: white;
@@ -398,21 +398,63 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             color: #3a7ace;
         }
 
+        /* Hamburger menu icon - Hidden by default on desktop */
+        .hamburger-menu {
+            display: none; /* Hidden on desktop */
+            color: #f0f0f0;
+            font-size: 1.8em;
+            cursor: pointer;
+            padding: 5px;
+            order: 2; /* Keep it on the right */
+        }
+
         /* Responsive Adjustments */
         @media (max-width: 768px) {
             .circular-nav {
                 height: 50px;
                 padding: 0 15px;
+                flex-wrap: wrap; /* Allow content to wrap */
+                justify-content: space-between; /* Keep Unitrade and hamburger at ends */
+                align-items: center;
             }
             .nav-center {
                 font-size: 1.3em;
+                order: 1; /* Keep Unitrade first */
             }
             .nav-right {
-                gap: 15px;
+                display: none; /* Hide desktop nav links by default on mobile */
+                flex-direction: column; /* Stack links vertically when shown */
+                width: 100%; /* Take full width for dropdown */
+                background-color: #2c2c2c; /* Background for dropdown */
+                position: absolute; /* Position below nav */
+                top: 50px; /* Below the nav bar (adjust for nav height) */
+                left: 0;
+                border-radius: 0 0 15px 15px;
+                box-shadow: 0 8px 15px rgba(0, 0, 0, 0.4);
+                padding: 0; /* Initial padding 0 for collapse effect */
+                z-index: 1000; /* Ensure it's above other content */
+                gap: 5px; /* Smaller gap for stacked links */
+                border-top: 1px solid #4a90e2; /* Separator line */
+                overflow: hidden; /* Hide overflow when not active */
+                max-height: 0; /* Initially hidden */
+                transition: max-height 0.3s ease-out, padding 0.3s ease-out; /* Smooth transition */
             }
+
+            .nav-right.active {
+                display: flex; /* Show when active */
+                max-height: 200px; /* Adjust based on number of links */
+                padding: 10px 0;
+            }
+
             .nav-link {
                 font-size: 0.9em;
-                padding: 4px 10px;
+                padding: 8px 20px; /* Larger touch targets for mobile */
+                width: calc(100% - 40px); /* Full width with padding */
+                text-align: center;
+            }
+
+            .hamburger-menu {
+                display: block; /* Show hamburger icon on mobile */
             }
 
             .wrapper {
@@ -462,6 +504,12 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                 font-size: 0.8em;
                 padding: 3px 8px;
             }
+            .hamburger-menu {
+                font-size: 1.6em;
+            }
+            .nav-right.active {
+                top: 45px; /* Adjust dropdown position for smaller nav height */
+            }
 
             .wrapper {
                 padding: 20px;
@@ -471,6 +519,76 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                 font-size: 1.8em;
             }
         }
+
+        /* Custom Modal Styles */
+        .modal-overlay {
+            display: none; /* Hidden by default */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            justify-content: center;
+            align-items: center;
+            z-index: 2000; /* Above everything else */
+        }
+
+        .modal-content {
+            background-color: #2c2c2c;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+            border: 2px solid #4a90e2;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+            color: #f0f0f0;
+        }
+
+        .modal-content h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            color: #f0f0f0;
+        }
+
+        .modal-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 25px;
+        }
+
+        .modal-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+        }
+
+        .modal-btn.confirm {
+            background-color: #e74c3c;
+            color: white;
+        }
+
+        .modal-btn.confirm:hover {
+            background-color: #c0392b;
+            transform: translateY(-2px);
+        }
+
+        .modal-btn.cancel {
+            background-color: #555;
+            color: white;
+        }
+
+        .modal-btn.cancel:hover {
+            background-color: #777;
+            transform: translateY(-2px);
+        }
     </style>
 </head>
 <body>
@@ -478,9 +596,14 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         <div class="nav-center">
             Unitrade
         </div>
-        <div class="nav-right">
+        <!-- Hamburger menu icon for mobile -->
+        <div class="hamburger-menu">
+            <i class='bx bx-menu'></i>
+        </div>
+        <div class="nav-right mobile-nav-links">
             <a href="dashboard.php" class="nav-link">Dashboard</a>
             <a href="profile.php" class="nav-link">Profile</a>
+            <a href="cart.php" class="nav-link"><i class='bx bx-cart'></i> Cart</a>
             <a href="logout.php" class="nav-link">Logout</a>
         </div>
     </nav>
@@ -534,10 +657,30 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         </div>
     </div>
 
+    <!-- Custom Confirmation Modal -->
+    <div id="confirmationModal" class="modal-overlay">
+        <div class="modal-content">
+            <h3>Confirm Removal</h3>
+            <p>Are you sure you want to remove this item from your cart?</p>
+            <div class="modal-buttons">
+                <button class="modal-btn confirm" id="confirmRemoveBtn">Remove</button>
+                <button class="modal-btn cancel" id="cancelRemoveBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const errorMessageDiv = document.getElementById('error-message');
             const successMessageDiv = document.getElementById('success-message');
+            const hamburgerMenu = document.querySelector('.hamburger-menu');
+            const navRight = document.querySelector('.nav-right');
+
+            // Modal elements
+            const confirmationModal = document.getElementById('confirmationModal');
+            const confirmRemoveBtn = document.getElementById('confirmRemoveBtn');
+            const cancelRemoveBtn = document.getElementById('cancelRemoveBtn');
+            let itemIdToRemove = null; // To store the item ID when modal is opened
 
             function displayMessage(message, type = 'error') {
                 errorMessageDiv.style.display = 'none';
@@ -551,6 +694,18 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                 }
             }
 
+            // Function to show the custom confirmation modal
+            function showConfirmationModal(itemId) {
+                itemIdToRemove = itemId;
+                confirmationModal.style.display = 'flex'; // Use flex to center
+            }
+
+            // Function to hide the custom confirmation modal
+            function hideConfirmationModal() {
+                confirmationModal.style.display = 'none';
+                itemIdToRemove = null;
+            }
+
             // Display any messages from PHP (e.g., from add_to_cart.php)
             <?php if (!empty($errorMessage)): ?>
                 displayMessage('<?php echo htmlspecialchars($errorMessage); ?>', 'error');
@@ -562,36 +717,50 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             document.querySelectorAll('.remove-item-btn').forEach(button => {
                 button.addEventListener('click', async (event) => {
                     const itemId = button.dataset.itemId;
-                    if (!confirm('Are you sure you want to remove this item from your cart?')) {
-                        return; // User cancelled
-                    }
-
-                    displayMessage('Removing item...', 'success'); // Optimistic message
-
-                    try {
-                        const formData = new FormData();
-                        formData.append('action', 'remove_item');
-                        formData.append('item_id', itemId);
-
-                        const response = await fetch('cart.php', { // Post back to cart.php
-                            method: 'POST',
-                            body: formData
-                        });
-                        const result = await response.json();
-
-                        if (result.success) {
-                            displayMessage(result.message, 'success');
-                            // Reload the page to update total and check for empty cart state
-                            setTimeout(() => { location.reload(); }, 500); 
-                        } else {
-                            displayMessage(result.message, 'error');
-                        }
-                    } catch (error) {
-                        console.error('Error removing item from cart:', error);
-                        displayMessage('An unexpected error occurred while removing the item.', 'error');
-                    }
+                    showConfirmationModal(itemId); // Show custom modal instead of confirm()
                 });
             });
+
+            // Handle confirm removal from modal
+            if (confirmRemoveBtn) {
+                confirmRemoveBtn.addEventListener('click', async () => {
+                    if (itemIdToRemove) {
+                        hideConfirmationModal();
+                        displayMessage('Removing item...', 'success'); // Optimistic message
+
+                        try {
+                            const formData = new FormData();
+                            formData.append('action', 'remove_item');
+                            formData.append('item_id', itemIdToRemove);
+
+                            const response = await fetch('cart.php', { // Post back to cart.php
+                                method: 'POST',
+                                body: formData
+                            });
+                            const result = await response.json();
+
+                            if (result.success) {
+                                displayMessage(result.message, 'success');
+                                // Reload the page to update total and check for empty cart state
+                                setTimeout(() => { location.reload(); }, 500); 
+                            } else {
+                                displayMessage(result.message, 'error');
+                            }
+                        } catch (error) {
+                            console.error('Error removing item from cart:', error);
+                            displayMessage('An unexpected error occurred while removing the item.', 'error');
+                        }
+                    }
+                });
+            }
+
+            // Handle cancel removal from modal
+            if (cancelRemoveBtn) {
+                cancelRemoveBtn.addEventListener('click', () => {
+                    hideConfirmationModal();
+                });
+            }
+
 
             // Handle quantity increase/decrease buttons
             document.querySelectorAll('.qty-btn').forEach(button => {
@@ -626,6 +795,13 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                     }
                 });
             });
+
+            // Hamburger menu toggle logic
+            if (hamburgerMenu && navRight) {
+                hamburgerMenu.addEventListener('click', () => {
+                    navRight.classList.toggle('active');
+                });
+            }
         });
     </script>
 </body>

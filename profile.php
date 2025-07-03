@@ -438,21 +438,64 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             color: #3a7ace;
         }
 
+        /* Hamburger menu icon - Hidden by default on desktop */
+        .hamburger-menu {
+            display: none; /* Hidden on desktop */
+        }
+
         /* Responsive Adjustments */
         @media (max-width: 768px) {
             .circular-nav {
                 height: 50px;
                 padding: 0 15px;
+                flex-wrap: wrap; /* Allow content to wrap */
+                justify-content: space-between; /* Keep Unitrade and hamburger at ends */
+                align-items: center;
             }
             .nav-center {
                 font-size: 1.3em;
+                order: 1; /* Keep Unitrade first */
             }
             .nav-right {
-                gap: 15px;
+                display: none; /* Hide desktop nav links by default on mobile */
+                flex-direction: column; /* Stack links vertically when shown */
+                width: 100%; /* Take full width for dropdown */
+                background-color: #2c2c2c; /* Background for dropdown */
+                position: absolute; /* Position below nav */
+                top: 60px; /* Below the nav bar */
+                left: 0;
+                border-radius: 0 0 15px 15px;
+                box-shadow: 0 8px 15px rgba(0, 0, 0, 0.4);
+                padding: 10px 0;
+                z-index: 1000; /* Ensure it's above other content */
+                gap: 5px; /* Smaller gap for stacked links */
+                border-top: 1px solid #4a90e2; /* Separator line */
+                overflow: hidden; /* Hide overflow when not active */
+                max-height: 0; /* Initially hidden */
+                transition: max-height 0.3s ease-out, padding 0.3s ease-out; /* Smooth transition */
             }
+
+            .nav-right.active {
+                display: flex; /* Show when active */
+                max-height: 200px; /* Adjust based on number of links */
+                padding: 10px 0;
+            }
+
             .nav-link {
                 font-size: 0.9em;
-                padding: 4px 10px;
+                padding: 8px 20px; /* Larger touch targets for mobile */
+                width: calc(100% - 40px); /* Full width with padding */
+                text-align: center;
+            }
+
+            /* Hamburger menu icon */
+            .hamburger-menu {
+                display: block; /* Show hamburger icon on mobile */
+                color: #f0f0f0;
+                font-size: 1.8em;
+                cursor: pointer;
+                padding: 5px;
+                order: 2; /* Keep it on the right */
             }
 
             .wrapper {
@@ -480,6 +523,12 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                 font-size: 0.8em;
                 padding: 3px 8px;
             }
+            .hamburger-menu {
+                font-size: 1.6em;
+            }
+            .nav-right.active {
+                top: 45px; /* Adjust dropdown position for smaller nav height */
+            }
 
             .wrapper {
                 padding: 20px;
@@ -496,7 +545,11 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         <div class="nav-center">
             Unitrade
         </div>
-        <div class="nav-right">
+        <!-- Hamburger menu icon for mobile -->
+        <div class="hamburger-menu">
+            <i class='bx bx-menu'></i>
+        </div>
+        <div class="nav-right mobile-nav-links">
             <a href="dashboard.php" class="nav-link">Dashboard</a>
             <a href="profile.php" class="nav-link">Profile</a>
             <a href="logout.php" class="nav-link">Logout</a>
@@ -586,6 +639,9 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             const profilePicInput = document.getElementById('profile_pic');
             const profilePicDisplay = document.getElementById('profile-pic-display');
             const fileUploadNameSpan = document.getElementById('file-upload-name');
+            const hamburgerMenu = document.querySelector('.hamburger-menu');
+            const navRight = document.querySelector('.nav-right');
+
 
             function displayMessage(message, type = 'error') {
                 errorMessageDiv.style.display = 'none';
@@ -678,6 +734,13 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                         submitButton.textContent = originalButtonText;
                         submitButton.disabled = false;
                     }
+                });
+            }
+
+            // Hamburger menu toggle logic
+            if (hamburgerMenu && navRight) {
+                hamburgerMenu.addEventListener('click', () => {
+                    navRight.classList.toggle('active');
                 });
             }
         });
