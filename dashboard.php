@@ -666,6 +666,7 @@ ob_end_flush();
             <!-- Dynamic navigation links after login -->
             <a href="dashboard.php" class="nav-link">Dashboard</a>
             <a href="profile.php" class="nav-link">Profile</a>
+            <a href="cart.php" class="nav-link"><i class='bx bx-cart'></i> Cart</a>
             <a href="logout.php" class="nav-link">Logout</a>
         </div>
     </nav>
@@ -772,8 +773,8 @@ ob_end_flush();
                             <p class="listing-price">R <?php echo number_format($listing['price'], 2); ?></p>
                             <p class="listing-status">Status: <span><?php echo htmlspecialchars($listing['status']); ?></span></p>
                             <div class="listing-actions">
-                                <a href="edit_item.php?item_id=<?php echo $listing['item_id']; ?>" class="action-btn edit-btn"><i class='bx bx-edit-alt'></i> Edit</a>
-                                <a href="delete_item.php?item_id=<?php echo $listing['item_id']; ?>" class="action-btn delete-btn" onclick="return confirm('Are you sure you want to delete this item?');"><i class='bx bx-trash'></i> Delete</a>
+                            <a href="edit_item.php?item_id=<?php echo $listing['item_id']; ?>" class="action-btn edit-btn"><i class='bx bx-edit-alt'></i> Edit</a>
+                            <a href="delete_item.php?item_id=<?php echo $listing['item_id']; ?>" class="action-btn delete-btn" onclick="return confirm('Are you sure you want to delete this item?');"><i class='bx bx-trash'></i> Delete</a>
                             </div>
                         </div>
                     <?php endforeach; ?>
