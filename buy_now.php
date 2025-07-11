@@ -1,138 +1,77 @@
 <?php
 // buy_now.php
-session_start(); // Start the session to manage user and cart information
+session_start();
 
-// Include the database connection file
-require_once 'database.php'; // Adjust path as necessary (assuming this defines $link)
+// Set error reporting for production (errors will be logged, not displayed)
+ini_set('display_errors', 0);
+ini_set('display_startup_errors', 0);
+error_reporting(E_ALL);
+
+require_once 'database.php'; // Include your database connection
 
 // --- User Authentication Check ---
-// If the user is not logged in, redirect them to the login page
 if (!isset($_SESSION['user_id'])) {
-    $_SESSION['form_message'] = ['type' => 'error', 'text' => 'Please log in to buy items.'];
     header("Location: login.php");
     exit();
 }
 
 $current_user_id = $_SESSION['user_id'];
-$item_id = $_GET['item_id'] ?? null; // Get item_id from the URL
-$item = null; // To store fetched item data
+$itemId = filter_input(INPUT_GET, 'item_id', FILTER_VALIDATE_INT);
+
+$item = null;
+$userData = null;
 $errorMessage = '';
-$successMessage = '';
 
-// Check for any session messages (e.g., from a redirect)
-if (isset($_SESSION['form_message'])) {
-    if ($_SESSION['form_message']['type'] === 'success') {
-        $successMessage = $_SESSION['form_message']['text'];
-    } else {
-        $errorMessage = $_SESSION['form_message']['text'];
-    }
-    unset($_SESSION['form_message']); // Clear the message after displaying
-}
-
-// Validate item_id from URL
-if (empty($item_id) || !is_numeric($item_id)) {
-    $errorMessage = 'Invalid item selected for direct purchase.';
-    // No redirect immediately, display error on page
-} else {
-    // --- Fetch Item Details from Database ---
+// Fetch item details
+if ($itemId) {
     $stmt = $link->prepare("SELECT item_id, title, description, price, image_urls, seller_id FROM Items WHERE item_id = ? AND status = 'Available'");
-    if ($stmt === false) {
-        $errorMessage = 'Database query preparation failed: ' . $link->error;
-    } else {
-        $stmt->bind_param("i", $item_id);
+    if ($stmt) {
+        $stmt->bind_param("i", $itemId);
         $stmt->execute();
         $result = $stmt->get_result();
-        if ($result->num_rows === 1) {
+        if ($result->num_rows > 0) {
             $item = $result->fetch_assoc();
-            // Prevent buying your own item
+            // Ensure user cannot buy their own item
             if ($item['seller_id'] == $current_user_id) {
-                $errorMessage = 'You cannot buy your own listing.';
-                $item = null; // Clear item data to prevent display
+                $errorMessage = "You cannot purchase your own listing.";
+                $item = null; // Invalidate item to prevent purchase
             }
         } else {
-            $errorMessage = 'Item not found or not available for purchase.';
+            $errorMessage = "Item not found or not available.";
         }
         $stmt->close();
+    } else {
+        $errorMessage = "Database error fetching item: " . $link->error;
     }
+} else {
+    $errorMessage = "No item ID provided.";
 }
 
-// --- Handle POST request for finalizing payment (placeholder for actual payment gateway) ---
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action']) && $_POST['action'] === 'finalize_buy_now') {
-    header('Content-Type: application/json'); // Respond with JSON for AJAX requests
-
-    $posted_item_id = $_POST['item_id'] ?? null;
-
-    // Re-fetch item details to ensure it's still available and valid
-    $recheck_item = null;
-    if (!empty($posted_item_id) && is_numeric($posted_item_id)) {
-        $recheckStmt = $link->prepare("SELECT item_id, title, price, seller_id FROM Items WHERE item_id = ? AND status = 'Available'");
-        if ($recheckStmt) {
-            $recheckStmt->bind_param("i", $posted_item_id);
-            $recheckStmt->execute();
-            $recheckResult = $recheckStmt->get_result();
-            if ($recheckRow = $recheckResult->fetch_assoc()) {
-                $recheck_item = $recheckRow;
+// Fetch user's default address details
+if ($item) { // Only fetch user data if item is valid
+    $stmt = $link->prepare("SELECT full_name, email, phone_number, default_address_type, default_street_address, default_complex_building, default_suburb, default_city_town, default_province, default_postal_code FROM Students WHERE student_id = ?");
+    if ($stmt) {
+        $stmt->bind_param("i", $current_user_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($result->num_rows > 0) {
+            $userData = $result->fetch_assoc();
+            // If no address type is set, default to 'delivery' or prompt user
+            if (empty($userData['default_address_type'])) {
+                $userData['default_address_type'] = 'delivery'; // Default if not set
+                // You might want to add a message here prompting the user to set their address
+                // $_SESSION['form_message'] = ['type' => 'warning', 'text' => 'Please set your default address in your profile.'];
             }
-            $recheckStmt->close();
+        } else {
+            $errorMessage = "User profile not found.";
         }
+        $stmt->close();
+    } else {
+        $errorMessage = "Database error fetching user data: " . $link->error;
     }
-
-    if (!$recheck_item || $recheck_item['seller_id'] == $current_user_id) {
-        echo json_encode(['success' => false, 'message' => 'Item is no longer available or you cannot purchase your own listing.']);
-        exit();
-    }
-
-    $link->begin_transaction(); // Start a transaction for atomicity
-
-    try {
-        // Insert into Transactions table for this single item
-        $insertStmt = $link->prepare("INSERT INTO Transactions (item_id, seller_id, buyer_id, transaction_date, amount, status, payment_method, delivery_method) VALUES (?, ?, ?, NOW(), ?, ?, ?, ?)");
-        if ($insertStmt === false) {
-            throw new Exception("Transaction insert prepare failed: " . $link->error);
-        }
-
-        $payment_method = "Credit Card (Simulated)"; // Example
-        $delivery_method = "Courier (Simulated)"; // Example
-        $transaction_status = "Pending Payment"; // Initial status
-
-        $insertStmt->bind_param("iiidsss",
-            $recheck_item['item_id'],
-            $recheck_item['seller_id'],
-            $current_user_id,
-            $recheck_item['price'], // Amount is just the item's price for Buy Now
-            $transaction_status,
-            $payment_method,
-            $delivery_method
-        );
-
-        if (!$insertStmt->execute()) {
-            throw new Exception("Transaction insert failed: " . $insertStmt->error);
-        }
-        $insertStmt->close();
-
-        // Update item status in Items table
-        $updateItemStmt = $link->prepare("UPDATE Items SET status = 'Sold' WHERE item_id = ?");
-        if ($updateItemStmt === false) {
-            throw new Exception("Item status update prepare failed: " . $link->error);
-        }
-        $updateItemStmt->bind_param("i", $recheck_item['item_id']);
-        if (!$updateItemStmt->execute()) {
-            throw new Exception("Item status update failed: " . $updateItemStmt->error);
-        }
-        $updateItemStmt->close();
-
-        $link->commit(); // Commit the transaction if all operations succeed
-
-        echo json_encode(['success' => true, 'message' => 'Purchase successful! Redirecting to dashboard...']);
-    } catch (Exception $e) {
-        $link->rollback(); // Rollback on error
-        error_log("Buy Now Error: " . $e->getMessage());
-        echo json_encode(['success' => false, 'message' => 'Failed to finalize purchase: ' . $e->getMessage()]);
-    }
-    exit();
 }
 
-// Close the database connection (for GET requests, POST requests would have exited)
+// Close the database connection
 if (isset($link) && is_object($link) && method_exists($link, 'close')) {
     $link->close();
 }
@@ -142,7 +81,7 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unitrade - Buy Now</title>
+    <title>Unitrade - Confirm Order</title>
     <!-- Boxicons CSS for icons -->
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <style>
@@ -150,14 +89,14 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         body {
             margin: 0;
             display: flex;
-            flex-direction: column; /* Arrange content vertically */
-            align-items: center; /* Center horizontally */
-            min-height: 100vh; /* Full viewport height */
-            background-color: #202020; /* Dark background to match nav */
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #202020;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            color: #f0f0f0; /* Light text color for contrast */
-            padding: 20px; /* Add some padding around the whole page */
-            box-sizing: border-box; /* Include padding in element's total width and height */
+            color: #f0f0f0;
+            padding: 20px;
+            box-sizing: border-box;
         }
 
         /* Nav Bar Styling - Consistent with other pages */
@@ -219,7 +158,7 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
             border: 2px solid #4a90e2;
             width: 100%;
-            max-width: 600px; /* Adjusted width for single item */
+            max-width: 700px; /* Adjusted max-width for order summary */
             box-sizing: border-box;
             color: #f0f0f0;
             text-align: center;
@@ -229,90 +168,90 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             text-align: center;
             color: #f0f0f0;
             margin-bottom: 30px;
-            font-size: 2.2em;
+            font-size: 2em;
         }
 
-        .form-message {
+        .error-message {
+            color: #ff6b6b;
             margin-bottom: 20px;
             font-weight: bold;
         }
-        .form-message.error {
-            color: #ff6b6b;
-        }
-        .form-message.success {
-            color: #2ecc71;
+
+        .order-summary-section {
+            background-color: #3a3a3a;
+            padding: 25px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+            border: 1px solid #555;
+            text-align: left;
         }
 
-        /* Item Summary Styles */
-        .item-summary-section {
-            margin-bottom: 30px;
-            text-align: left;
-            background-color: #3a3a3a;
-            padding: 20px;
-            border-radius: 10px;
-            border: 1px solid #555;
+        .order-summary-section h3 {
+            color: #4a90e2;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            border-bottom: 1px solid #555;
+            padding-bottom: 10px;
+        }
+
+        .item-details {
             display: flex;
             align-items: center;
             gap: 20px;
+            margin-bottom: 20px;
         }
 
-        .item-summary-image-container {
+        .item-image-container {
             width: 100px;
             height: 100px;
-            overflow: hidden;
             border-radius: 8px;
+            overflow: hidden;
             flex-shrink: 0;
-            background-color: #555; /* Placeholder background */
+            border: 1px solid #666;
         }
 
-        .item-summary-image {
+        .item-image {
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
 
-        .item-summary-details {
+        .item-info {
             flex-grow: 1;
         }
 
-        .item-summary-details h3 {
+        .item-info h4 {
+            margin: 0 0 5px 0;
+            font-size: 1.2em;
             color: #f0f0f0;
-            margin-top: 0;
-            margin-bottom: 5px;
-            font-size: 1.3em;
         }
 
-        .item-summary-details p {
-            margin: 0 0 5px 0;
-            font-size: 0.95em;
+        .item-info p {
+            margin: 0;
+            font-size: 0.9em;
             color: #ccc;
         }
 
-        .item-summary-price {
-            font-size: 1.4em;
-            font-weight: bold;
-            color: #2ecc71;
-            text-align: right;
-        }
-
-        /* Payment Form Placeholder Styles */
-        .payment-form-section {
-            background-color: #3a3a3a;
-            padding: 30px;
-            border-radius: 10px;
-            border: 1px solid #555;
-            text-align: left;
-            margin-top: 20px;
-        }
-
-        .payment-form-section h3 {
-            color: #4a90e2;
-            margin-top: 0;
-            margin-bottom: 20px;
+        .item-price {
             font-size: 1.5em;
-            text-align: center;
+            color: #2ecc71;
+            font-weight: bold;
+            text-align: right;
+            margin-left: auto; /* Push price to the right */
         }
 
+        .address-details p {
+            margin: 5px 0;
+            font-size: 1em;
+            color: #f0f0f0;
+        }
+
+        .address-details strong {
+            color: #4a90e2;
+        }
+
+        /* Payment Method Styles */
         .input-field {
             position: relative;
             margin-bottom: 20px;
@@ -321,13 +260,12 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         .input-field label {
             display: block;
             margin-bottom: 8px;
+            font-weight: bold;
             color: #f0f0f0;
-            font-size: 0.95em;
         }
 
-        .input-field input[type="text"],
-        .input-field input[type="email"],
-        .input-field input[type="tel"] {
+        .input-field select,
+        .input-field input[type="text"] {
             width: 100%;
             padding: 12px 15px;
             background-color: #2c2c2c;
@@ -340,15 +278,37 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             box-sizing: border-box;
         }
 
-        .input-field input:focus {
+        .input-field select:focus,
+        .input-field input[type="text"]:focus {
             border-color: #4a90e2;
             box-shadow: 0 0 8px rgba(74, 144, 226, 0.5);
         }
 
-        .btn-finalize-purchase {
+        .total-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 20px;
+            border-top: 1px solid #555;
+            margin-top: 20px;
+        }
+
+        .total-section .label {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #f0f0f0;
+        }
+
+        .total-section .amount {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #2ecc71;
+        }
+
+        .btn {
             width: 100%;
             padding: 15px;
-            background-color: #2ecc71; /* Green for payment */
+            background-color: #4a90e2;
             color: white;
             border: none;
             border-radius: 8px;
@@ -358,27 +318,30 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             transition: background-color 0.3s ease, transform 0.2s ease;
             margin-top: 20px;
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            text-decoration: none; /* For anchor tags if used as button */
+            display: block; /* Make it a block element for full width */
         }
-
-        .btn-finalize-purchase:hover {
-            background-color: #27ae60; /* Darker green on hover */
+        .btn:hover {
+            background-color: #3a7ace;
             transform: translateY(-2px);
         }
 
-        .links-container {
-            margin-top: 25px;
-            font-size: 0.95em;
-        }
-        .links-container a {
+        .back-link {
+            display: block;
+            margin-top: 20px;
             color: #4a90e2;
             text-decoration: none;
             font-weight: bold;
             transition: color 0.3s ease;
-            margin: 0 10px;
         }
-        .links-container a:hover {
+        .back-link:hover {
             text-decoration: underline;
             color: #3a7ace;
+        }
+
+        /* Hamburger menu icon - Hidden by default on desktop */
+        .hamburger-menu {
+            display: none;
         }
 
         /* Responsive Adjustments */
@@ -386,32 +349,68 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
             .circular-nav {
                 height: 50px;
                 padding: 0 15px;
+                flex-wrap: wrap;
+                justify-content: space-between;
+                align-items: center;
             }
             .nav-center {
                 font-size: 1.3em;
+                order: 1;
             }
             .nav-right {
-                gap: 15px;
+                display: none;
+                flex-direction: column;
+                width: 100%;
+                background-color: #2c2c2c;
+                position: absolute;
+                top: 60px;
+                left: 0;
+                border-radius: 0 0 15px 15px;
+                box-shadow: 0 8px 15px rgba(0, 0, 0, 0.4);
+                padding: 10px 0;
+                z-index: 1000;
+                gap: 5px;
+                border-top: 1px solid #4a90e2;
+                overflow: hidden;
+                max-height: 0;
+                transition: max-height 0.3s ease-out, padding 0.3s ease-out;
+            }
+            .nav-right.active {
+                display: flex;
+                max-height: 200px;
+                padding: 10px 0;
             }
             .nav-link {
                 font-size: 0.9em;
-                padding: 4px 10px;
+                padding: 8px 20px;
+                width: calc(100% - 40px);
+                text-align: center;
             }
-
+            .hamburger-menu {
+                display: block;
+                color: #f0f0f0;
+                font-size: 1.8em;
+                cursor: pointer;
+                padding: 5px;
+                order: 2;
+            }
             .wrapper {
                 padding: 30px;
                 width: 95%;
             }
-
             h2 {
-                font-size: 2em;
+                font-size: 1.8em;
             }
-            .item-summary-section {
+            .item-details {
                 flex-direction: column;
-                align-items: flex-start;
+                text-align: center;
             }
-            .item-summary-image-container {
-                margin-bottom: 15px;
+            .item-image-container {
+                margin-bottom: 10px;
+            }
+            .item-price {
+                margin-left: 0; /* Center price on small screens */
+                text-align: center;
             }
         }
 
@@ -430,13 +429,17 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
                 font-size: 0.8em;
                 padding: 3px 8px;
             }
-
+            .hamburger-menu {
+                font-size: 1.6em;
+            }
+            .nav-right.active {
+                top: 45px;
+            }
             .wrapper {
                 padding: 20px;
             }
-
             h2 {
-                font-size: 1.8em;
+                font-size: 1.6em;
             }
         }
     </style>
@@ -446,140 +449,167 @@ if (isset($link) && is_object($link) && method_exists($link, 'close')) {
         <div class="nav-center">
             Unitrade
         </div>
-        <div class="nav-right">
+        <!-- Hamburger menu icon for mobile -->
+        <div class="hamburger-menu">
+            <i class='bx bx-menu'></i>
+        </div>
+        <div class="nav-right mobile-nav-links">
             <a href="dashboard.php" class="nav-link">Dashboard</a>
             <a href="profile.php" class="nav-link">Profile</a>
+            <a href="cart.php" class="nav-link"><i class='bx bx-cart'></i> Cart</a>
             <a href="logout.php" class="nav-link">Logout</a>
         </div>
     </nav>
 
     <div class="wrapper">
-        <h2>Buy Now</h2>
+        <h2>Confirm Your Order</h2>
 
-        <div class="form-message error" id="error-message" style="display:none;">
-            <?php echo htmlspecialchars($errorMessage); ?>
-        </div>
-        <div class="form-message success" id="success-message" style="display:none;">
-            <?php echo htmlspecialchars($successMessage); ?>
-        </div>
-
-        <?php if ($item): ?>
-            <div class="item-summary-section">
-                <div class="item-summary-image-container">
-                    <?php
-                        $firstImageUrl = explode(',', $item['image_urls'])[0] ?? 'assets/default_product.png';
-                        $displayImageUrl = htmlspecialchars($firstImageUrl);
-                    ?>
-                    <img src="<?php echo $displayImageUrl; ?>" alt="<?php echo htmlspecialchars($item['title']); ?>" class="item-summary-image" onerror="this.onerror=null; this.src='assets/default_product.png';">
-                </div>
-                <div class="item-summary-details">
-                    <h3><?php echo htmlspecialchars($item['title']); ?></h3>
-                    <p><?php echo htmlspecialchars($item['description']); ?></p>
-                    <p class="item-summary-price">R <?php echo number_format($item['price'], 2); ?></p>
+        <?php if (!empty($errorMessage)): ?>
+            <p class="error-message"><?php echo htmlspecialchars($errorMessage); ?></p>
+            <a href="dashboard.php" class="back-link">Back to Dashboard</a>
+        <?php elseif ($item && $userData): ?>
+            <div class="order-summary-section">
+                <h3>Item Details</h3>
+                <div class="item-details">
+                    <div class="item-image-container">
+                        <?php
+                            $firstImageUrl = explode(',', $item['image_urls'])[0] ?? 'assets/default_product.png';
+                            $itemImageUrl = htmlspecialchars($firstImageUrl);
+                        ?>
+                        <img src="<?php echo $itemImageUrl; ?>" alt="<?php echo htmlspecialchars($item['title']); ?>" class="item-image" onerror="this.onerror=null; this.src='assets/default_product.png';">
+                    </div>
+                    <div class="item-info">
+                        <h4><?php echo htmlspecialchars($item['title']); ?></h4>
+                        <p><?php echo htmlspecialchars($item['description']); ?></p>
+                    </div>
+                    <span class="item-price">R <?php echo number_format($item['price'], 2); ?></span>
                 </div>
             </div>
 
-            <div class="payment-form-section">
-                <h3>Payment & Delivery Details</h3>
-                <form id="buyNowForm">
-                    <input type="hidden" name="item_id" value="<?php echo htmlspecialchars($item['item_id']); ?>">
-                    <!-- Placeholder for Shipping Address -->
-                    <div class="input-field">
-                        <label for="shipping_address">Shipping Address:</label>
-                        <input type="text" id="shipping_address" name="shipping_address" placeholder="Street Address, City, Postal Code" required>
-                    </div>
-                    <!-- Placeholder for Payment Method (e.g., Credit Card details) -->
-                    <div class="input-field">
-                        <label for="card_number">Card Number:</label>
-                        <input type="text" id="card_number" name="card_number" placeholder="XXXX XXXX XXXX XXXX" required>
-                    </div>
-                    <div class="input-field">
-                        <label for="expiry_date">Expiry Date (MM/YY):</label>
-                        <input type="text" id="expiry_date" name="expiry_date" placeholder="MM/YY" required>
-                    </div>
-                    <div class="input-field">
-                        <label for="cvv">CVV:</label>
-                        <input type="text" id="cvv" name="cvv" placeholder="XXX" required>
-                    </div>
-
-                    <button type="submit" class="btn-finalize-purchase">Finalize Purchase</button>
-                </form>
+            <div class="order-summary-section">
+                <h3>Delivery/Collection Details</h3>
+                <div class="address-details">
+                    <p><strong>Name:</strong> <?php echo htmlspecialchars($userData['full_name']); ?></p>
+                    <p><strong>Email:</strong> <?php echo htmlspecialchars($userData['email']); ?></p>
+                    <p><strong>Phone:</strong> <?php echo htmlspecialchars($userData['phone_number']); ?></p>
+                    <p><strong>Method:</strong> <?php echo htmlspecialchars(ucfirst($userData['default_address_type'])); ?></p>
+                    <?php if ($userData['default_address_type'] === 'delivery'): ?>
+                        <p><strong>Address:</strong>
+                            <?php echo htmlspecialchars($userData['default_street_address']); ?>
+                            <?php echo !empty($userData['default_complex_building']) ? ', ' . htmlspecialchars($userData['default_complex_building']) : ''; ?>,
+                            <?php echo htmlspecialchars($userData['default_suburb']); ?>,
+                            <?php htmlspecialchars($userData['default_city_town']); ?>,
+                            <?php echo htmlspecialchars($userData['default_province']); ?>,
+                            <?php echo htmlspecialchars($userData['default_postal_code']); ?>
+                        </p>
+                    <?php else: ?>
+                        <p><strong>Collection Point:</strong> Campus A2 building, main entrance</p>
+                    <?php endif; ?>
+                </div>
+                <a href="profile.php?tab=address_book" class="back-link" style="text-align: right; display: block;">Edit Address</a>
             </div>
+
+            <div class="order-summary-section">
+                <h3>Payment Information</h3>
+                <div class="input-field">
+                    <label for="payment_method">Select Payment Method:</label>
+                    <select id="payment_method" name="payment_method" form="paymentForm" required>
+                        <option value="">-- Select --</option>
+                        <option value="Credit Card">Credit Card</option>
+                        <option value="EFT">EFT (Electronic Funds Transfer)</option>
+                        <!-- Add other methods as needed -->
+                    </select>
+                </div>
+                <div id="payment-details-fields">
+                    <!-- Dynamic fields will be loaded here by JavaScript -->
+                </div>
+            </div>
+
+            <div class="total-section">
+                <span class="label">Total:</span>
+                <span class="amount">R <?php echo number_format($item['price'], 2); ?></span>
+            </div>
+
+            <form action="process_payment.php" method="post" id="paymentForm">
+                <input type="hidden" name="item_id" value="<?php echo htmlspecialchars($item['item_id']); ?>">
+                <input type="hidden" name="item_price" value="<?php echo htmlspecialchars($item['price']); ?>">
+                <input type="hidden" name="seller_id" value="<?php echo htmlspecialchars($item['seller_id']); ?>">
+                <input type="hidden" name="delivery_method" value="<?php echo htmlspecialchars($userData['default_address_type']); ?>">
+                <button type="submit" class="btn">Proceed to Payment</button>
+            </form>
+
+            <a href="dashboard.php" class="back-link">Cancel and Go Back</a>
+
         <?php else: ?>
-            <p style="text-align: center; color: #ff6b6b;">
-                <?php echo htmlspecialchars($errorMessage); ?>
-            </p>
+            <p class="error-message">Unable to display order details. Please try again.</p>
+            <a href="dashboard.php" class="back-link">Back to Dashboard</a>
         <?php endif; ?>
-
-        <div class="links-container">
-            <a href="dashboard.php">Back to Dashboard</a>
-        </div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const buyNowForm = document.getElementById('buyNowForm');
-            const errorMessageDiv = document.getElementById('error-message');
-            const successMessageDiv = document.getElementById('success-message');
+            const hamburgerMenu = document.querySelector('.hamburger-menu');
+            const navRight = document.querySelector('.nav-right');
+            const paymentMethodSelect = document.getElementById('payment_method');
+            const paymentDetailsFields = document.getElementById('payment-details-fields');
+            const paymentForm = document.getElementById('paymentForm'); // Get the form by its new ID
 
-            function displayMessage(message, type = 'error') {
-                errorMessageDiv.style.display = 'none';
-                successMessageDiv.style.display = 'none';
-                if (type === 'success') {
-                    successMessageDiv.textContent = message;
-                    successMessageDiv.style.display = 'block';
-                } else {
-                    errorMessageDiv.textContent = message;
-                    errorMessageDiv.style.display = 'block';
-                }
-            }
-
-            // Display any messages from PHP
-            <?php if (!empty($errorMessage)): ?>
-                displayMessage('<?php echo htmlspecialchars($errorMessage); ?>', 'error');
-            <?php elseif (!empty($successMessage)): ?>
-                displayMessage('<?php echo htmlspecialchars($successMessage); ?>', 'success');
-            <?php endif; ?>
-
-            if (buyNowForm) {
-                buyNowForm.addEventListener('submit', async (event) => {
-                    event.preventDefault();
-                    displayMessage('', 'none'); // Clear previous messages
-
-                    const finalizeButton = buyNowForm.querySelector('.btn-finalize-purchase');
-                    const originalButtonText = finalizeButton.textContent;
-                    finalizeButton.textContent = 'Processing...';
-                    finalizeButton.disabled = true;
-
-                    try {
-                        const formData = new FormData(buyNowForm);
-                        formData.append('action', 'finalize_buy_now'); // Action for this specific purchase
-
-                        const response = await fetch('buy_now.php', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const result = await response.json();
-
-                        if (result.success) {
-                            displayMessage(result.message, 'success');
-                            // Redirect to a success page or dashboard after a short delay
-                            setTimeout(() => {
-                                window.location.href = 'dashboard.php?purchase_successful=true';
-                            }, 2000);
-                        } else {
-                            displayMessage(result.message, 'error');
-                        }
-                    } catch (error) {
-                        console.error('Error during Buy Now purchase:', error);
-                        displayMessage('An unexpected error occurred during purchase. Please try again.', 'error');
-                    } finally {
-                        finalizeButton.textContent = originalButtonText;
-                        finalizeButton.disabled = false;
-                    }
+            // Hamburger menu toggle logic
+            if (hamburgerMenu && navRight) {
+                hamburgerMenu.addEventListener('click', () => {
+                    navRight.classList.toggle('active');
                 });
             }
+
+            // Function to dynamically load payment input fields
+            function loadPaymentFields() {
+                const selectedMethod = paymentMethodSelect.value;
+                paymentDetailsFields.innerHTML = ''; // Clear previous fields
+
+                if (selectedMethod === 'Credit Card') {
+                    paymentDetailsFields.innerHTML = `
+                        <div class="input-field">
+                            <label for="card_number">Card Number:</label>
+                            <input type="text" id="card_number" name="card_number" placeholder="XXXX XXXX XXXX XXXX" required pattern="[0-9]{13,16}" title="Enter a valid credit card number (13-16 digits)">
+                        </div>
+                        <div class="input-field">
+                            <label for="expiry_date">Expiry Date (MM/YY):</label>
+                            <input type="text" id="expiry_date" name="expiry_date" placeholder="MM/YY" required pattern="(0[1-9]|1[0-2])\\/[0-9]{2}" title="Enter expiry date in MM/YY format">
+                        </div>
+                        <div class="input-field">
+                            <label for="cvv">CVV:</label>
+                            <input type="text" id="cvv" name="cvv" placeholder="XXX" required pattern="[0-9]{3,4}" title="Enter 3 or 4 digit CVV">
+                        </div>
+                    `;
+                } else if (selectedMethod === 'EFT') {
+                    paymentDetailsFields.innerHTML = `
+                        <div class="input-field">
+                            <label for="bank_name">Bank Name:</label>
+                            <input type="text" id="bank_name" name="bank_name" placeholder="e.g., FNB, Absa" required>
+                        </div>
+                        <div class="input-field">
+                            <label for="account_number">Account Number:</label>
+                            <input type="text" id="account_number" name="account_number" placeholder="e.g., 123456789" required pattern="[0-9]+" title="Enter a valid account number">
+                        </div>
+                    `;
+                }
+                // Instead of appending to the form, the fields are now inside paymentDetailsFields div.
+                // The form attribute 'form="paymentForm"' on the select element ensures it's submitted with the form.
+                // For the dynamically added inputs, they are already within the form context due to being inside #payment-details-fields,
+                // which is itself inside the <form id="paymentForm">.
+                // No explicit appending to paymentForm is needed here.
+            }
+
+            // Event listener for payment method selection change
+            if (paymentMethodSelect) {
+                paymentMethodSelect.addEventListener('change', loadPaymentFields);
+            }
+
+            // Initial load of payment fields if a method is pre-selected (unlikely in this flow but good practice)
+            loadPaymentFields();
         });
     </script>
 </body>
 </html>
+
+

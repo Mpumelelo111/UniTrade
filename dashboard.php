@@ -27,9 +27,62 @@ $current_full_name = $_SESSION['full_name'];
 $current_email = $_SESSION['email'];
 $current_student_number = $_SESSION['student_number']; // Assuming this is also stored in session
 
+// --- Handle AJAX requests for liking/unliking ---
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
+    // Ensure we are handling an AJAX request for like/unlike
+    if ($_POST['action'] === 'toggle_like') {
+        header('Content-Type: application/json');
+        $itemId = filter_input(INPUT_POST, 'item_id', FILTER_VALIDATE_INT);
+        $isLiked = filter_input(INPUT_POST, 'is_liked', FILTER_VALIDATE_BOOLEAN); // true if currently liked, false if not
+
+        if ($itemId === false || $itemId === null) {
+            echo json_encode(['success' => false, 'message' => 'Invalid item ID.']);
+            exit();
+        }
+
+        // Re-establish connection if it was closed by previous operations
+        // This is important because the main script might close it before AJAX is handled
+        if (!isset($link) || !$link->ping()) {
+            require_once 'database.php'; // Re-include if connection was closed
+        }
+
+        if ($isLiked) {
+            // User is unliking the item: DELETE from LikedItems
+            $stmt = $link->prepare("DELETE FROM LikedItems WHERE student_id = ? AND item_id = ?");
+            if ($stmt) {
+                $stmt->bind_param("ii", $current_user_id, $itemId);
+                if ($stmt->execute()) {
+                    echo json_encode(['success' => true, 'message' => 'Item unliked.']);
+                } else {
+                    echo json_encode(['success' => false, 'message' => 'Failed to unlike item: ' . $stmt->error]);
+                }
+                $stmt->close();
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Database error preparing unlike statement: ' . $link->error]);
+            }
+        } else {
+            // User is liking the item: INSERT into LikedItems (ON DUPLICATE KEY UPDATE handles re-liking)
+            $stmt = $link->prepare("INSERT INTO LikedItems (student_id, item_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE liked_at = CURRENT_TIMESTAMP");
+            if ($stmt) {
+                $stmt->bind_param("ii", $current_user_id, $itemId);
+                if ($stmt->execute()) {
+                    echo json_encode(['success' => true, 'message' => 'Item liked.']);
+                } else {
+                    echo json_encode(['success' => false, 'message' => 'Failed to like item: ' . $stmt->error]);
+                }
+                $stmt->close();
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Database error preparing like statement: ' . $link->error]);
+            }
+        }
+        exit(); // Stop script execution after handling AJAX request
+    }
+}
+
+
 // --- Fetch User Profile Picture URL from Database ---
 $profilePicUrl = 'assets/default_profile.png'; // Default profile picture
-// REVERTED: Changed $conn back to $link for database connection
+// Changed $conn back to $link for database connection
 $stmt = $link->prepare("SELECT profile_pic_url FROM Students WHERE student_id = ?");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -42,8 +95,7 @@ if ($stmt) {
     }
     $stmt->close();
 } else {
-    // Log database error for debugging
-    // REVERTED: Changed $conn->error back to $link->error
+    // Changed $conn->error back to $link->error
     error_log("Error preparing profile pic query: " . $link->error);
 }
 
@@ -69,11 +121,45 @@ $current_role = $_SESSION['user_role'];
 $products = []; // For buyer view (all active products)
 $userListings = []; // For seller view (current user's products)
 
+// --- Fetch Liked Item IDs for the current user (for buyer view) ---
+$likedItemIds = [];
 if ($current_role === 'buyer') {
-    // Fetch all active products for the buyer view, INCLUDING seller_id
-    // REVERTED: Changed $conn back to $link
-    $stmt = $link->prepare("SELECT item_id, title, description, price, rating, image_urls, seller_id FROM Items WHERE status = 'Available' ORDER BY posted_at DESC");
+    $stmt = $link->prepare("SELECT item_id FROM LikedItems WHERE student_id = ?");
     if ($stmt) {
+        $stmt->bind_param("i", $current_user_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $likedItemIds[] = $row['item_id'];
+        }
+        $stmt->close();
+    } else {
+        error_log("Error preparing liked items query: " . $link->error);
+    }
+}
+
+
+if ($current_role === 'buyer') {
+    $search_query = $_GET['search'] ?? ''; // Get search query from URL
+    $sql_query = "SELECT item_id, title, description, price, rating, image_urls, seller_id FROM Items WHERE status = 'Available'";
+    $params = [];
+    $types = '';
+
+    if (!empty($search_query)) {
+        $sql_query .= " AND (title LIKE ? OR description LIKE ?)";
+        $search_term = '%' . $search_query . '%';
+        $params[] = $search_term;
+        $params[] = $search_term;
+        $types .= 'ss';
+    }
+
+    $sql_query .= " ORDER BY posted_at DESC";
+
+    $stmt = $link->prepare($sql_query);
+    if ($stmt) {
+        if (!empty($params)) {
+            $stmt->bind_param($types, ...$params);
+        }
         $stmt->execute();
         $result = $stmt->get_result();
         while ($row = $result->fetch_assoc()) {
@@ -81,12 +167,10 @@ if ($current_role === 'buyer') {
         }
         $stmt->close();
     } else {
-        // REVERTED: Changed $conn->error back to $link->error
         error_log("Error preparing products query for buyer: " . $link->error);
     }
 } else { // 'seller' role
     // Fetch products listed by the current user
-    // REVERTED: Changed $conn back to $link
     $stmt = $link->prepare("SELECT item_id, title, description, price, rating, image_urls, status FROM Items WHERE seller_id = ? ORDER BY posted_at DESC");
     if ($stmt) {
         $stmt->bind_param("i", $current_user_id);
@@ -97,7 +181,6 @@ if ($current_role === 'buyer') {
         }
         $stmt->close();
     } else {
-        // REVERTED: Changed $conn->error back to $link->error
         error_log("Error preparing user listings query for seller: " . $link->error);
     }
 }
@@ -108,7 +191,6 @@ $itemsSold = 0;
 $pendingOrders = 0;
 
 // Get items listed by the current user
-// REVERTED: Changed $conn back to $link
 $stmt = $link->prepare("SELECT COUNT(*) AS total_listed FROM Items WHERE seller_id = ?");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -123,7 +205,6 @@ if ($stmt) {
 
 // Get items sold by the current user (requires Transactions table)
 // This counts 'Completed' transactions where the current user is the seller
-// REVERTED: Changed $conn back to $link
 $stmt = $link->prepare("SELECT COUNT(*) AS total_sold FROM Transactions WHERE seller_id = ? AND status = 'Completed'");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -138,7 +219,6 @@ if ($stmt) {
 
 // Get pending orders for the current user (if they are a seller)
 // This counts 'Pending Payment' transactions where the current user is the seller
-// REVERTED: Changed $conn back to $link
 $stmt = $link->prepare("SELECT COUNT(*) AS total_pending FROM Transactions WHERE seller_id = ? AND status = 'Pending Payment'");
 if ($stmt) {
     $stmt->bind_param("i", $current_user_id);
@@ -151,7 +231,6 @@ if ($stmt) {
 }
 
 // Close the database connection
-// REVERTED: Changed $conn back to $link
 if (isset($link) && is_object($link) && method_exists($link, 'close')) {
     $link->close();
 }
@@ -336,6 +415,55 @@ ob_end_flush();
             font-size: 2em;
         }
 
+        /* Search Bar Styling */
+        .search-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            width: 100%;
+            max-width: 600px; /* Adjust as needed */
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .search-input {
+            flex-grow: 1;
+            padding: 12px 15px;
+            background-color: #3a3a3a;
+            border: 1px solid #555;
+            border-radius: 8px;
+            font-size: 1em;
+            outline: none;
+            color: #f0f0f0;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            box-sizing: border-box;
+        }
+
+        .search-input::placeholder {
+            color: #bbb;
+        }
+
+        .search-input:focus {
+            border-color: #4a90e2;
+            box-shadow: 0 0 8px rgba(74, 144, 226, 0.5);
+        }
+
+        .search-button {
+            padding: 12px 20px;
+            background-color: #4a90e2;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+        }
+
+        .search-button:hover {
+            background-color: #3a7ace;
+            transform: translateY(-2px);
+        }
+
         /* Product Grid Styling (for Buyer View) */
         .product-grid {
             display: grid;
@@ -352,7 +480,6 @@ ob_end_flush();
             border: 1px solid #555;
             text-align: left;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
-            cursor: pointer;
             display: flex;
             flex-direction: column;
         }
@@ -360,6 +487,43 @@ ob_end_flush();
         .product-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 6px 15px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Header for product card to hold title and like icon */
+        .product-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px; /* Space between header and image */
+        }
+
+        .product-name {
+            font-size: 1.3em;
+            color: #f0f0f0;
+            margin: 0; /* Reset margin to fit in flex container */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex-grow: 1; /* Allow title to take available space */
+        }
+
+        .like-icon {
+            font-size: 1.8em; /* Larger icon */
+            color: #bbb; /* Default grey */
+            cursor: pointer;
+            transition: color 0.2s ease, transform 0.2s ease;
+            padding: 5px; /* Make it easier to click */
+            border-radius: 50%; /* Optional: subtle circular background on hover */
+            margin-left: 10px; /* Space between title and icon */
+        }
+
+        .like-icon:hover {
+            transform: scale(1.1);
+            background-color: rgba(255, 255, 255, 0.05); /* Subtle hover effect */
+        }
+
+        .like-icon.liked {
+            color: #e74c3c; /* Red for liked state */
         }
 
         .product-image-container {
@@ -378,15 +542,6 @@ ob_end_flush();
             width: 100%;
             height: 100%;
             object-fit: cover;
-        }
-
-        .product-name {
-            font-size: 1.3em;
-            color: #f0f0f0;
-            margin-bottom: 5px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
         }
 
         .product-description {
@@ -682,6 +837,15 @@ ob_end_flush();
                 width: 100%;
                 margin: 5px 0;
             }
+
+            .search-container {
+                flex-direction: column;
+                max-width: 100%;
+            }
+
+            .search-button {
+                width: 100%;
+            }
         }
 
         @media (max-width: 480px) {
@@ -762,10 +926,25 @@ ob_end_flush();
 
         <?php if ($current_role === 'buyer'): ?>
             <h3 class="dashboard-section-title">Items for Sale</h3>
+
+            <!-- Search Bar for Buyer View -->
+            <form action="dashboard.php" method="get" class="search-container">
+                <input type="hidden" name="switch_role" value="buyer"> <!-- Keep role consistent on search -->
+                <input type="text" name="search" placeholder="Search items by title or description..." class="search-input" value="<?php echo htmlspecialchars($search_query); ?>">
+                <button type="submit" class="search-button"><i class='bx bx-search'></i> Search</button>
+            </form>
+
             <?php if (!empty($products)): ?>
                 <div class="product-grid">
                     <?php foreach ($products as $product): ?>
                         <div class="product-card">
+                            <div class="product-card-header">
+                                <h4 class="product-name"><?php echo htmlspecialchars($product['title']); ?></h4>
+                                <?php if ($product['seller_id'] != $current_user_id): // Only show like button if not own listing ?>
+                                    <i class='bx <?php echo in_array($product['item_id'], $likedItemIds) ? 'bxs-heart liked' : 'bx-heart'; ?> like-icon'
+                                       data-item-id="<?php echo htmlspecialchars($product['item_id']); ?>"></i>
+                                <?php endif; ?>
+                            </div>
                             <div class="product-image-container">
                                 <?php
                                     // Assuming image_urls might be a comma-separated string, take the first one
@@ -774,7 +953,6 @@ ob_end_flush();
                                 ?>
                                 <img src="<?php echo $productImageUrl; ?>" alt="<?php echo htmlspecialchars($product['title']); ?>" class="product-image" onerror="this.onerror=null; this.src='assets/default_product.png';">
                             </div>
-                            <h4 class="product-name"><?php echo htmlspecialchars($product['title']); ?></h4>
                             <p class="product-description"><?php echo htmlspecialchars($product['description']); ?></p>
                             <div class="product-rating">
                                 <?php
@@ -832,27 +1010,26 @@ ob_end_flush();
                             </div>
                             <h5 class="listing-title"><?php echo htmlspecialchars($listing['title']); ?></h5>
                             <p class="listing-price">R <?php echo number_format($listing['price'], 2); ?></p>
-                            <p class="listing-status">Status: <span><?php echo htmlspecialchars($listing['status']); ?></span></p>
-                            <div class="listing-actions">
-                            <a href="edit_item.php?item_id=<?php echo $listing['item_id']; ?>" class="action-btn edit-btn"><i class='bx bx-edit-alt'></i> Edit</a>
-                            <a href="delete_item.php?item_id=<?php echo $listing['item_id']; ?>" class="action-btn delete-btn" onclick="return confirm('Are you sure you want to delete this item?');"><i class='bx bx-trash'></i> Delete</a>
+                            <p class="listing-status">Status: <?php echo htmlspecialchars($listing['status']); ?></p>
+                            <div class="seller-listing-card .listing-actions">
+                                <a href="edit_item.php?item_id=<?php echo htmlspecialchars($listing['item_id']); ?>" class="action-btn edit-btn">Edit</a>
+                                <a href="delete_item.php?item_id=<?php echo htmlspecialchars($listing['item_id']); ?>" class="action-btn delete-btn" onclick="return confirm('Are you sure you want to delete this item?');">Delete</a>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
             <?php else: ?>
-                <p style="text-align: center; color: #ccc;">You haven't listed any items yet. Click "Add New Item" to get started!</p>
+                <p style="text-align: center; color: #ccc;">You have no items listed yet. Click "Add New Item" to get started!</p>
             <?php endif; ?>
 
+            <h4 class="dashboard-section-title" style="font-size: 1.8em;">Quick Stats</h4>
+            <ul class="info-list">
+                <li>Items Listed: <span><?php echo $itemsListed; ?></span></li>
+                <li>Items Sold: <span><?php echo $itemsSold; ?></span></li>
+                <li>Pending Orders: <span><?php echo $pendingOrders; ?></span></li>
+            </ul>
+
         <?php endif; ?>
-
-        <h3 class="dashboard-section-title">Quick Stats</h3>
-        <ul class="info-list">
-            <li>Items Listed: <span><?php echo $itemsListed; ?></span></li>
-            <li>Items Sold: <span><?php echo $itemsSold; ?></span></li>
-            <li>Pending Orders: <span><?php echo $pendingOrders; ?></span></li>
-        </ul>
-
     </div>
 
     <script>
@@ -860,11 +1037,54 @@ ob_end_flush();
             const hamburgerMenu = document.querySelector('.hamburger-menu');
             const navRight = document.querySelector('.nav-right');
 
+            // Hamburger menu toggle logic
             if (hamburgerMenu && navRight) {
                 hamburgerMenu.addEventListener('click', () => {
                     navRight.classList.toggle('active');
                 });
             }
+
+            // Handle Like/Unlike functionality
+            document.querySelectorAll('.like-icon').forEach(icon => {
+                icon.addEventListener('click', async (event) => {
+                    event.stopPropagation(); // Prevent parent card click event if any
+                    const itemId = icon.dataset.itemId;
+                    const isLiked = icon.classList.contains('liked'); // Check current state
+
+                    try {
+                        const formData = new FormData();
+                        formData.append('action', 'toggle_like');
+                        formData.append('item_id', itemId);
+                        formData.append('is_liked', isLiked ? 'true' : 'false'); // Send current state as string
+
+                        const response = await fetch('dashboard.php', {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        const result = await response.json();
+
+                        if (result.success) {
+                            // Toggle the icon's appearance
+                            if (isLiked) {
+                                icon.classList.remove('bxs-heart', 'liked');
+                                icon.classList.add('bx-heart');
+                            } else {
+                                icon.classList.remove('bx-heart');
+                                icon.classList.add('bxs-heart', 'liked');
+                            }
+                            // Optionally display a success message to the user
+                            // console.log(result.message);
+                        } else {
+                            console.error('Like/Unlike failed:', result.message);
+                            // Optionally display an error message to the user
+                        }
+                    } catch (error) {
+                        console.error('Error toggling like status:', error);
+                        // Optionally display a general error message
+                    }
+                });
+            });
         });
     </script>
 </body>
